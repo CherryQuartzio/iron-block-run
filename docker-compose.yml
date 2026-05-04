@@ -1,0 +1,22 @@
+services:
+  minerl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: minerl-dev:latest
+    working_dir: /workspace
+    environment:
+      TMPDIR: /opt/tmp
+      TEMP: /opt/tmp
+      TMP: /opt/tmp
+      JAVA_HOME: /opt/conda/envs/minerl
+    volumes:
+      - .:/workspace
+      - minerl-tmp:/opt/tmp
+    shm_size: "2gb"
+    stdin_open: true
+    tty: true
+    command: tail -f /dev/null
+
+volumes:
+  minerl-tmp:
