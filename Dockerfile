@@ -34,5 +34,7 @@ RUN conda run --no-capture-output -n "${CONDA_ENV_NAME}" \
 RUN conda run --no-capture-output -n "${CONDA_ENV_NAME}" \
     python -m pip install --no-cache-dir git+https://github.com/minerllabs/minerl
 RUN conda run --no-capture-output -n "${CONDA_ENV_NAME}" \
+    python -m pip install --no-cache-dir stable-baselines3
+RUN conda run --no-capture-output -n "${CONDA_ENV_NAME}" \
     python -c "import minerl; print(minerl.__version__)"
 CMD ["bash"]

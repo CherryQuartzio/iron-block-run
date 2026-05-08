@@ -17,6 +17,13 @@ services:
     stdin_open: true
     tty: true
     command: tail -f /dev/null
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 volumes:
   minerl-tmp:
