@@ -18,13 +18,24 @@ import logging
 from typing import List
 
 import gym
+from typing import Optional, Tuple
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend for headless rendering
 import matplotlib.pyplot as plt
 from PIL import Image
-
 import minerl  # noqa: F401 — registers built-in MineRL envs on import
+# Optional OpenCV for visualization. It's safe if not installed; visualization
+# remains disabled by default.
+try:
+    import cv2
+    print("USING CV2")
+    _CV2_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    cv2 = None
+    print("NOT USING CV2")
+    _CV2_AVAILABLE = False
+VISUALIZE = True
 from minerl.herobraine.env_spec import EnvSpec
 from minerl.herobraine.env_specs.human_controls import HumanControlEnvSpec
 from minerl.herobraine.hero import handlers
@@ -250,7 +261,7 @@ class HorseRaceEnv(gym.Env):
 
     metadata = {"render.modes": ["human"]}
 
-    def __init__(self):
+    def __init__(self, visualize: bool = False, vis_size: Tuple[int, int] = NATIVE_RES, show_annotations: bool = True, video_path: Optional[str] = None):
         super().__init__()
 
         # Create the inner MineRL environment from our registered spec
@@ -271,6 +282,20 @@ class HorseRaceEnv(gym.Env):
 
         # Internal state
         self._prev_obs = None
+
+        # Raw last observation (MineRL pov) — used for visualization
+        self._last_raw_obs = None
+
+        # Visualization settings
+        self._visualize = bool(visualize) and _CV2_AVAILABLE
+        # vis_size provided as (width, height) to match NATIVE_RES ordering
+        self._vis_size = tuple(vis_size)
+        self._show_annotations = bool(show_annotations)
+        self._video_path = video_path
+        self._video_writer = None
+        if self._visualize and self._video_path is not None and _CV2_AVAILABLE:
+            # Initialize video writer lazily on first frame when we know frame size
+            self._video_writer = None
 
     # -- Observation helpers ---------------------------------------------
 
@@ -362,6 +387,12 @@ class HorseRaceEnv(gym.Env):
         if obs_after_mount is not None:
             obs = obs_after_mount
 
+        # Keep the raw MineRL observation for visualization
+        try:
+            self._last_raw_obs = obs
+        except Exception:
+            self._last_raw_obs = None
+
         processed = self._preprocess_obs(obs)
         self._prev_obs = processed
         return processed
@@ -377,8 +408,20 @@ class HorseRaceEnv(gym.Env):
             Tuple of (observation, reward, done, info).
         """
         minerl_action = self._map_action(action)
-        obs, _minerl_reward, done, info = self._env.step(minerl_action)
-
+        result = self._env.step(minerl_action)
+        # Support Gym API variations (some return (obs, reward, terminated, truncated, info))
+        if len(result) == 5:
+            obs, _minerl_reward, terminated, truncated, info = result
+            done = terminated or truncated
+        else:
+            obs, _minerl_reward, done, info = result
+        if self._visualize:
+            self.render()
+        # Store raw observation for visualization
+        try:
+            self._last_raw_obs = obs
+        except Exception:
+            self._last_raw_obs = None
         processed = self._preprocess_obs(obs)
 
         reward = self.compute_reward(
@@ -390,6 +433,64 @@ class HorseRaceEnv(gym.Env):
 
         self._prev_obs = processed
         return processed, reward, done, info
+
+
+    def render(self, mode: str = "human", return_frame: bool = False):
+        """Render or return a visual frame using OpenCV.
+
+        When visualization is enabled and OpenCV is available, this will show
+        a window (non-blocking) and optionally return the BGR frame.
+        """
+        if not _CV2_AVAILABLE:
+            return None
+
+        raw = self._last_raw_obs
+        if raw is None or "pov" not in raw:
+            return None
+
+        frame_rgb = raw["pov"]
+        # Ensure numpy array
+        frame = np.array(frame_rgb, dtype=np.uint8)
+
+        # Convert RGB -> BGR for OpenCV
+        try:
+            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        except Exception:
+            # If conversion fails (odd shapes), fall back to using as-is
+            bgr = frame
+
+        # Resize to requested visualization size (vis_size is (width, height))
+        try:
+            width, height = self._vis_size
+            bgr = cv2.resize(bgr, (int(width), int(height)), interpolation=cv2.INTER_LINEAR)
+        except Exception:
+            pass
+
+        # Annotations (optional)
+        if self._show_annotations and _CV2_AVAILABLE:
+            text = "HorseRaceEnv"
+            cv2.putText(bgr, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Initialize video writer lazily if requested
+        if self._video_path is not None and self._video_writer is None and _CV2_AVAILABLE:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            h, w = bgr.shape[:2]
+            self._video_writer = cv2.VideoWriter(self._video_path, fourcc, 20.0, (w, h))
+
+        if self._video_writer is not None:
+            # VideoWriter expects BGR frames
+            self._video_writer.write(bgr)
+
+        if self._visualize and _CV2_AVAILABLE:
+            try:
+                cv2.imshow("HorseRace", bgr)
+                cv2.waitKey(1)
+            except Exception:
+                # In headless contexts this may fail; ignore to keep training running
+                pass
+
+        if return_frame:
+            return bgr
 
     def compute_reward(
         self,
@@ -452,13 +553,22 @@ class HorseRaceEnv(gym.Env):
 
         return reward
 
-    def render(self, mode="human"):
-        """Delegate rendering to the inner MineRL environment."""
-        return self._env.render(mode=mode)
-
     def close(self):
         """Clean up the inner MineRL environment."""
         self._env.close()
+        # Release video writer and destroy windows if used
+        if getattr(self, "_video_writer", None) is not None:
+            try:
+                self._video_writer.release()
+            except Exception:
+                pass
+            self._video_writer = None
+
+        if _CV2_AVAILABLE:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
 
 
 # ===========================================================================
@@ -471,7 +581,7 @@ def make_env():
     HorseRaceEnv instance.  Used by SB3's DummyVecEnv.
     """
     def _init():
-        return HorseRaceEnv()
+        return HorseRaceEnv(visualize=VISUALIZE)
     return _init
 
 
