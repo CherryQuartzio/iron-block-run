@@ -60,8 +60,8 @@ WORLD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "world")
 
 # -- Agent spawn --
 SPAWN_X = -73.0
-SPAWN_Y = 71.0     # Adjust Y to match your world's ground level at (0, Z=0)
-SPAWN_Z = -150.0
+SPAWN_Y = 69.0     # Adjust Y to match your world's ground level at (0, Z=0)
+SPAWN_Z = -149.0
 SPAWN_YAW = 180.0    # Facing +Z direction (toward the horse / race track start)
 
 # -- Horse spawn (directly in front of agent) --
@@ -185,9 +185,10 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
         ]
 
     def create_observables(self) -> List[TranslationHandler]:
-        """Only the first-person camera view — no inventory observation."""
+        """First-person camera view + agent location (for debugging position)."""
         return [
             handlers.POVObservation(self.resolution),
+            handlers.ObservationFromCurrentLocation(),  # Adds agent position, yaw, pitch
         ]
 
     def create_actionables(self) -> List[TranslationHandler]:
@@ -228,23 +229,23 @@ _horse_race_spec.register()
 # Discrete action table — maps integer index to MineRL action dict overrides
 ACTION_TABLE = [
     # 0: No-op
-    {},
-    # 1: Forward
-    {"forward": 1},
-    # 2: Forward + Left
-    {"forward": 1, "left": 1},
-    # 3: Forward + Right
-    {"forward": 1, "right": 1},
-    # 4: Forward + Jump
-    {"forward": 1, "jump": 1},
-    # 5: Camera — look left
+    # {},
+    # # 1: Forward
+    # {"forward": 1},
+    # # 2: Forward + Left
+    # {"forward": 1, "left": 1},
+    # # 3: Forward + Right
+    # {"forward": 1, "right": 1},
+    # # 4: Forward + Jump
+    # {"forward": 1, "jump": 1},
+    # # 5: Camera — look left
     {"camera": np.array([0.0, -5.0])},
-    # 6: Camera — look right
-    {"camera": np.array([0.0, 5.0])},
-    # 7: Camera — look up
-    {"camera": np.array([-5.0, 0.0])},
-    # 8: Camera — look down
-    {"camera": np.array([5.0, 0.0])},
+    # # 6: Camera — look right
+    # {"camera": np.array([0.0, 5.0])},
+    # # 7: Camera — look up
+    # {"camera": np.array([-5.0, 0.0])},
+    # # 8: Camera — look down
+    # {"camera": np.array([5.0, 0.0])},
 ]
 
 NUM_ACTIONS = len(ACTION_TABLE)
@@ -297,6 +298,10 @@ class HorseRaceEnv(gym.Env):
             # Initialize video writer lazily on first frame when we know frame size
             self._video_writer = None
 
+        # Step tracking and position logging
+        self._step_count = 0
+        self._print_coords = True  # Set to False to disable position logging
+
     # -- Observation helpers ---------------------------------------------
 
     @staticmethod
@@ -328,6 +333,33 @@ class HorseRaceEnv(gym.Env):
         for key, value in overrides.items():
             act[key] = value
         return act
+
+    # -- Horse mounting --------------------------------------------------
+
+    def _log_position(self, obs: dict, step: int = 0) -> None:
+        """
+        Extract and print agent position from observation.
+
+        The ObservationFromCurrentLocation handler adds position/rotation data
+        to the observation dict. Tries multiple field name variations since
+        different MineRL versions use different names.
+        """
+        if not self._print_coords or obs is None:
+            return
+        pos = obs['location_stats']
+        try:
+            # Try multiple field name variations (different MineRL versions)
+            x = pos['xpos']
+            y = pos['ypos']
+            z = pos['zpos']
+            yaw = pos['yaw']
+            pitch = pos['pitch']
+            logger.info(
+                f"Step {step:5d} | Pos: X={x:7.2f} Y={y:6.2f} Z={z:7.2f} | "
+                f"Yaw={yaw:6.1f}° Pitch={pitch:6.1f}°"
+            )
+        except Exception as e:
+            logger.debug(f"Could not extract position: {e}")
 
     # -- Horse mounting --------------------------------------------------
 
@@ -393,6 +425,10 @@ class HorseRaceEnv(gym.Env):
         except Exception:
             self._last_raw_obs = None
 
+        # Log initial position
+        self._step_count = 0
+        self._log_position(obs, step=0)
+
         processed = self._preprocess_obs(obs)
         self._prev_obs = processed
         return processed
@@ -415,6 +451,11 @@ class HorseRaceEnv(gym.Env):
             done = terminated or truncated
         else:
             obs, _minerl_reward, done, info = result
+
+        # Increment step counter and log position
+        self._step_count += 1
+        self._log_position(obs, step=self._step_count)
+
         if self._visualize:
             self.render()
         # Store raw observation for visualization
