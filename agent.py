@@ -13,7 +13,6 @@ Requires:
 Usage:
     xvfb-run python agent.py
 """
-
 import os
 import logging
 from typing import List
@@ -49,15 +48,15 @@ from stable_baselines3.common.callbacks import BaseCallback
 WORLD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "world")
 
 # -- Agent spawn --
-SPAWN_X = 0.5
-SPAWN_Y = 65.0     # Adjust Y to match your world's ground level at (0, Z=0)
-SPAWN_Z = 0.5
-SPAWN_YAW = 0.0    # Facing +Z direction (toward the horse / race track start)
+SPAWN_X = -73.0
+SPAWN_Y = 71.0     # Adjust Y to match your world's ground level at (0, Z=0)
+SPAWN_Z = -150.0
+SPAWN_YAW = 180.0    # Facing +Z direction (toward the horse / race track start)
 
 # -- Horse spawn (directly in front of agent) --
-HORSE_X = 0
-HORSE_Y = 65       # Same ground level as agent
-HORSE_Z = 2        # 2 blocks ahead of the agent
+HORSE_X = SPAWN_X
+HORSE_Y = SPAWN_Y       # Same ground level as agent
+HORSE_Z = SPAWN_Z+2        # 2 blocks ahead of the agent
 
 # -- Observation --
 OBS_WIDTH = 64
@@ -435,8 +434,23 @@ class HorseRaceEnv(gym.Env):
         Returns:
             A float reward value.
         """
-        # --- STUB: Replace with actual reward logic ---
-        return 0.0
+        reward = 0.0
+        # Reward forward movement actions
+        if action in [1, 2, 3, 4]:  # Forward, Fwd+Left, Fwd+Right, Fwd+Jump
+            reward += 0.05
+
+        # Penalize doing nothing
+        elif action == 0:
+            reward -= 0.10
+
+        # Small penalty for camera-only actions
+        elif action in [5, 6, 7, 8]:
+            reward -= 0.02
+
+        # Time penalty (encourages faster completion)
+        reward -= 0.001
+
+        return reward
 
     def render(self, mode="human"):
         """Delegate rendering to the inner MineRL environment."""
