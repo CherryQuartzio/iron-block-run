@@ -71,8 +71,8 @@ HORSE_Y = SPAWN_Y       # Same ground level as agent
 HORSE_Z = SPAWN_Z+2        # 2 blocks ahead of the agent
 
 # -- Observation --
-OBS_WIDTH = 64
-OBS_HEIGHT = 64
+OBS_WIDTH = 144
+OBS_HEIGHT = 144
 NATIVE_RES = (640, 360)  # MineRL v1.0.2 native POV resolution (width, height)
 
 # -- Training hyperparameters --
@@ -253,9 +253,9 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
         """
         return [
             DrawingDecorator(
-                f'<DrawEntity x="{HORSE_X}" y="{HORSE_Y}" z="{HORSE_Z}" '
+                f'<DrawEntity x="{HORSE_X}" y="{HORSE_Y}" z="{HORSE_Z}" yaw="{-45}"'
                 f'type="minecraft:horse">'
-                f'<NBTData>{{Tame:1b,SaddleItem:{{id:"minecraft:saddle",Count:1b}}}}</NBTData>'
+                f'<NBTData>{{Tame:1b, SaddleItem:{{id:"minecraft:saddle",Count:1b}}, CustomName:{{"text":"Horace"}}, Attributes:[{{Name:"minecraft:generic.movement_speed",Base:0.2}}, {{Name:"minecraft:horse.jump_strength",Base:.85}}, {{Name:"minecraft:generic.max_health",Base:20.0}}],  Health:20.0f,  Variant:1029}}</NBTData>'
                 f'</DrawEntity>'
             )
         ]
