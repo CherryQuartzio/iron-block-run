@@ -1111,23 +1111,30 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     # ------------------------------------------------------------------
 
     logger.info("Initialising PPO with CnnPolicy...")
-    model = PPO(
-        policy="CnnPolicy",
-        env=env,
-        learning_rate=LEARNING_RATE,
-        n_steps=N_STEPS,
-        batch_size=BATCH_SIZE,
-        n_epochs=N_EPOCHS,
-        gamma=GAMMA,
-        gae_lambda=GAE_LAMBDA,
-        clip_range=CLIP_RANGE,
-        verbose=1,
-        # Uncomment and modify the line below to use a custom visual encoder:
-        # policy_kwargs=dict(
-        #     features_extractor_class=MyCustomEncoder,
-        #     features_extractor_kwargs=dict(features_dim=512),
-        # ),
-    )
+
+    # load horse_race_ppo.zip if it exists
+    if os.path.exists("horse_race_ppo.zip"):
+        model = PPO.load("horse_race_ppo.zip", env=env)
+        logger.info("Loaded pre-trained model from horse_race_ppo.zip")
+    else:
+        logger.info("No pre-trained model found, training from scratch")
+        model = PPO(
+            policy="CnnPolicy",
+            env=env,
+            learning_rate=LEARNING_RATE,
+            n_steps=N_STEPS,
+            batch_size=BATCH_SIZE,
+            n_epochs=N_EPOCHS,
+            gamma=GAMMA,
+            gae_lambda=GAE_LAMBDA,
+            clip_range=CLIP_RANGE,
+            verbose=1,
+            # Uncomment and modify the line below to use a custom visual encoder:
+            # policy_kwargs=dict(
+            #     features_extractor_class=MyCustomEncoder,
+            #     features_extractor_kwargs=dict(features_dim=512),
+            # ),
+        )
 
     # Set up reward tracking
     reward_callback = RewardTrackingCallback(verbose=1)
