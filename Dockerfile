@@ -34,5 +34,11 @@ RUN conda run --no-capture-output -n "${CONDA_ENV_NAME}" \
 RUN conda run --no-capture-output -n "${CONDA_ENV_NAME}" \
     python -m pip install --no-cache-dir git+https://github.com/minerllabs/minerl
 RUN conda run --no-capture-output -n "${CONDA_ENV_NAME}" \
-    python -m pip install --no-cache-dir stable-baselines3 opencv-python
+    python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy
+
+# Create a non-root user for security
+RUN useradd -ms /bin/bash minerluser
+USER minerluser
+
+# Switch to non-root user and set entrypoint
 CMD ["bash"]
