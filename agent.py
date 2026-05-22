@@ -239,7 +239,7 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
         return [
             FileWorldGenerator(
                 filename=WORLD_DIR,
-                destroy_after_use=False,  # Preserve the world between episodes
+                destroy_after_use=True,  # Set to True so it actually loads from the absolute path
             )
         ]
 
@@ -253,9 +253,9 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
         """
         return [
             DrawingDecorator(
-                f'<DrawEntity x="{HORSE_X}" y="{HORSE_Y}" z="{HORSE_Z}" yaw="{-45}"'
+                f'<DrawEntity x="{HORSE_X}" y="{HORSE_Y}" z="{HORSE_Z}" yaw="{SPAWN_YAW}"'
                 f'type="minecraft:horse">'
-                f'<NBTData>{{Tame:1b, SaddleItem:{{id:"minecraft:saddle",Count:1b}}, CustomName:{{"text":"Horace"}}, Attributes:[{{Name:"minecraft:generic.movement_speed",Base:0.2}}, {{Name:"minecraft:horse.jump_strength",Base:.85}}, {{Name:"minecraft:generic.max_health",Base:20.0}}],  Health:20.0f,  Variant:1029}}</NBTData>'
+                f'<NBTData>{{Tame:1b, SaddleItem:{{id:"minecraft:saddle",Count:1b}}, Attributes:[{{Name:"minecraft:generic.movement_speed",Base:0.2}}, {{Name:"minecraft:horse.jump_strength",Base:.85}}, {{Name:"minecraft:generic.max_health",Base:20.0}}],  Health:20.0f,  Variant:1029}}</NBTData>'
                 f'</DrawEntity>'
             )
         ]
