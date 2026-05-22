@@ -16,6 +16,8 @@ Usage:
 import os
 import logging
 import collections
+import zipfile
+import tempfile
 from typing import List
 
 import gym
@@ -40,10 +42,11 @@ VISUALIZE = True
 from minerl.herobraine.env_spec import EnvSpec
 from minerl.herobraine.env_specs.human_controls import HumanControlEnvSpec
 from minerl.herobraine.hero import handlers
-from minerl.herobraine.hero.handlers.server.world import FileWorldGenerator, DrawingDecorator
+from minerl.herobraine.hero.handlers.server.world import DrawingDecorator
 from minerl.herobraine.hero.handlers.agent.start import (
     AgentStartPlacement,
     DoneOnDeath,
+    LoadWorldAgentStart,
 )
 from minerl.herobraine.hero.handler import Handler
 from minerl.herobraine.hero.handlers.translation import TranslationHandler
@@ -58,6 +61,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 # -- Paths --
 WORLD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "world")
+WORLD_ZIP = None  # Set at runtime by prepare_world_zip()
 
 # -- Agent spawn --
 SPAWN_X = -73.0
@@ -161,6 +165,67 @@ logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
+#  0. World Zip Preparation
+# ===========================================================================
+
+def prepare_world_zip(world_dir: str) -> str:
+    """
+    Create a zip file of the custom world in the structure expected by
+    MineRL's Java ``ReplaySender.loadWorldFromZip()``.
+
+    The Java code expects the zip to contain files under:
+        ``<prefix>/saves/<world_name>/level.dat``
+        ``<prefix>/saves/<world_name>/region/...``
+
+    It extracts the world name as ``entries[0].split("/")[2]`` (third
+    path component of the first zip entry), then calls
+    ``Minecraft.loadWorld(extractDir/saves, worldName)``.
+
+    Returns:
+        The absolute path to the generated zip file.
+    """
+    global WORLD_ZIP
+
+    if not os.path.isdir(world_dir):
+        raise FileNotFoundError(
+            f"Custom world directory not found: {world_dir}. "
+            "Place a valid Minecraft 1.16.5 world folder there."
+        )
+
+    world_name = os.path.basename(world_dir)  # e.g. "world"
+    zip_dir = tempfile.mkdtemp(prefix="minerl_world_")
+    zip_path = os.path.join(zip_dir, f"{world_name}.zip")
+
+    logger.info("Preparing world zip: %s -> %s", world_dir, zip_path)
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Walk the world directory and add all files under
+        # the prefix structure: _/saves/<world_name>/...
+        # Skip session.lock to prevent Minecraft from rejecting the world.
+        prefix = os.path.join("_", "saves", world_name)
+        for root, dirs, files in os.walk(world_dir):
+            for fname in files:
+                if fname == "session.lock":
+                    continue
+                abs_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(abs_path, world_dir)
+                arc_name = os.path.join(prefix, rel_path)
+                zf.write(abs_path, arc_name)
+
+    WORLD_ZIP = zip_path
+    logger.info("World zip ready: %s (WORLD_ZIP set)", zip_path)
+    return zip_path
+
+
+# Prepare the world zip at import time so it's available when the env is created
+try:
+    prepare_world_zip(WORLD_DIR)
+except FileNotFoundError as e:
+    logger.warning("Could not prepare world zip: %s", e)
+    logger.warning("The environment will generate a random world instead.")
+
+
+# ===========================================================================
 #  1a. Custom Block Grid Observation Handler
 # ===========================================================================
 
@@ -235,13 +300,14 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
     # -- World generation ------------------------------------------------
 
     def create_server_world_generators(self) -> List[Handler]:
-        """Load the custom race-track world from disk."""
-        return [
-            FileWorldGenerator(
-                filename=WORLD_DIR,
-                destroy_after_use=True,  # Set to True so it actually loads from the absolute path
-            )
-        ]
+        """No world generator needed — the world is loaded via LoadWorldFile.
+
+        MineRL v1.0.2's Java mod (EnvServer) ignores FileWorldGenerator XML
+        entirely.  Instead, the world is injected via the AgentStart handler
+        using <LoadWorldFile>, which the Java side reads and loads via
+        ReplaySender.loadWorldFromZip().
+        """
+        return []
 
     def create_server_decorators(self) -> List[Handler]:
         """
@@ -284,8 +350,8 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
     # -- Agent -----------------------------------------------------------
 
     def create_agent_start(self) -> List[Handler]:
-        """Spawn the agent at the configured coordinates."""
-        return super().create_agent_start() + [
+        """Spawn the agent at the configured coordinates and load the custom world."""
+        agent_start = super().create_agent_start() + [
             AgentStartPlacement(
                 x=SPAWN_X,
                 y=SPAWN_Y,
@@ -294,6 +360,10 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
             ),
             DoneOnDeath(),
         ]
+        # Inject the custom world via LoadWorldFile (zip path)
+        if WORLD_ZIP is not None:
+            agent_start.append(LoadWorldAgentStart(filename=WORLD_ZIP))
+        return agent_start
 
     def create_observables(self) -> List[TranslationHandler]:
         """First-person camera view + agent location (for debugging position)."""
