@@ -61,7 +61,7 @@ WORLD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "world")
 
 # -- Agent spawn --
 SPAWN_X = -73.0
-SPAWN_Y = 69.0     # Adjust Y to match your world's ground level at (0, Z=0)
+SPAWN_Y = 100.0     # Adjust Y to match your world's ground level at (0, Z=0)
 SPAWN_Z = -149.0
 SPAWN_YAW = 180.0    # Facing +Z direction (toward the horse / race track start)
 
