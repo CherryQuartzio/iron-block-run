@@ -11,7 +11,7 @@ The bundled Docker Compose file assumed that you're running Debian Linux either 
 
 A machine with at least 16GB or RAM is recommended.
 
-### Run environment with Docker (recommended)
+### Run environment with Docker
 
 Clone this repo and run the following from the root. This will bring you into the containerized shell environment
 
@@ -19,32 +19,15 @@ Clone this repo and run the following from the root. This will bring you into th
 docker compose build
 docker compose up -d
 docker compose exec minerl bash
-conda activate minerl
 ```
 
-### Manual install
+### Run environment using Conda
 
-1. Make sure conda is installed
-2. Create the conda environment: `conda create -n minerl -c conda-forge python=3.10 pip openjdk=8`
-3. Create a dedicated directory for this project and `cd` into it, then do the commands below:
+Clone this repo and run the following from the root.
 
 ```bash
-conda activate minerl
-
-# Free package/build caches
-python -m pip cache purge
-conda clean --all -y
-
-# Use a temp directory on a filesystem with more free space
-mkdir -p "$HOME/tmp" "$HOME/.cache/pip"
-export TMPDIR="$HOME/tmp"
-export TEMP="$HOME/tmp"
-export TMP="$HOME/tmp"
-export PIP_CACHE_DIR="$HOME/.cache/pip"
-
-# install
-python -m pip install --upgrade pip wheel
-python -m pip install --no-cache-dir git+https://github.com/minerllabs/minerl
+# setup the environment
+bash setup_conda.sh
 ```
 
 ## Run

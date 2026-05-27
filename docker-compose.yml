@@ -9,11 +9,11 @@ services:
       TMPDIR: /opt/tmp
       TEMP: /opt/tmp
       TMP: /opt/tmp
-      JAVA_HOME: /opt/conda/envs/minerl
+      JAVA_HOME: /opt/conda
     volumes:
       - .:/workspace
       - minerl-tmp:/opt/tmp
-    shm_size: "2gb"
+    shm_size: "4gb"
     stdin_open: true
     tty: true
     command: tail -f /dev/null
