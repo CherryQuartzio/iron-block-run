@@ -29,11 +29,11 @@ conda activate "$ENV_NAME"
 echo "Upgrading pip..."
 python -m pip install --upgrade pip
 
-echo "Installing MineRL..."
-python -m pip install --no-cache-dir git+https://github.com/minerllabs/minerl
-
 echo "Installing additional dependencies..."
 python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy
+
+echo "Installing MineRL..."
+python -m pip install --no-cache-dir git+https://github.com/minerllabs/minerl
 
 echo "============================================================"
 echo "Environment setup complete!"

@@ -93,6 +93,12 @@ MAX_EPISODE_STEPS = 6000  # ~5 minutes at 20 tps
 # -- Output --
 MODEL_SAVE_PATH = "horse_race_ppo"
 REWARD_PLOT_PATH = "training_rewards.png"
+RACE_TIME_PLOT_PATH = "training_race_time.png"
+SEGMENT_TIME_PLOT_PATH = "training_segment_times.png"
+COMPLETION_RATE_PLOT_PATH = "training_completion_rate.png"
+
+# -- Timing --
+TICKS_PER_SECOND = 20  # Minecraft runs at 20 ticks per second
 
 # -- Reward constants (tunable) --
 REWARD_CHECKPOINT = 50.0        # Crossing the next expected checkpoint
@@ -108,6 +114,7 @@ PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -5.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -5.0   # Terminal: too far from track
+PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
@@ -522,6 +529,17 @@ class HorseRaceEnv(gym.Env):
         self._last_ground_block = "air"
         self._force_done = False          # Set True to end episode early
 
+        # -- Timing / statistics state --
+        self._episode_start_step = 0          # Set after mount in reset()
+        self._lap_complete = False            # True when all checkpoints crossed
+        # Step at which each checkpoint was crossed; None if not reached.
+        # Index 0 = Start/Goal (lap finish), 1..5 = CP_A..CP_E
+        self._checkpoint_times = [None] * NUM_CHECKPOINTS
+        # Time (seconds) for each of the 6 segments; None if segment not completed
+        self._segment_splits = [None] * NUM_CHECKPOINTS
+        # Step when the agent entered the current segment (last checkpoint crossed)
+        self._segment_enter_step = 0
+
     @staticmethod
     def _extract_position(obs: dict):
         """Return (x, y, z) from MineRL observation dict, or None."""
@@ -612,12 +630,16 @@ class HorseRaceEnv(gym.Env):
         Convert a discrete action index into a full MineRL action dict.
 
         Starts from a no-op action and applies the overrides from
-        ACTION_TABLE[action_index].
+        ACTION_TABLE[action_index].  Always forces sneak=0 to prevent
+        the agent from dismounting the horse.
         """
         act = self._get_noop_action()
         overrides = ACTION_TABLE[action_index]
         for key, value in overrides.items():
             act[key] = value
+        # Prevent dismounting: sneak (Shift) dismounts the horse in MC
+        if "sneak" in act:
+            act["sneak"] = 0
         return act
 
     # -- Horse mounting --------------------------------------------------
@@ -717,6 +739,9 @@ class HorseRaceEnv(gym.Env):
 
         # Reset reward tracking for new episode
         self._init_reward_state()
+        # Record the step at which gameplay begins (after mount sequence)
+        self._episode_start_step = self._step_count
+        self._segment_enter_step = self._step_count
         pos = self._extract_position(obs)
         if pos is not None:
             self._last_pos = pos
@@ -896,6 +921,7 @@ class HorseRaceEnv(gym.Env):
           - Time penalty                  (PENALTY_TIME per step)
           - Stuck too long                (PENALTY_STUCK + episode ends)
           - Far off-course                (PENALTY_FAR_OFF_COURSE + episode ends)
+          - Wrong direction (backward)    (PENALTY_WRONG_DIRECTION per step)
 
         Args:
             obs:      Current preprocessed observation (H×W×3 uint8).
@@ -916,9 +942,24 @@ class HorseRaceEnv(gym.Env):
         if pos is not None and self._last_pos is not None:
             target_cp = CHECKPOINTS[self._next_checkpoint_idx]
             if self._checkpoint_crossed(pos, self._last_pos, target_cp):
+                # Record timestamp and segment split
+                self._checkpoint_times[self._next_checkpoint_idx] = self._step_count
+                segment_steps = self._step_count - self._segment_enter_step
+                # Map checkpoint index to segment index:
+                # Segment 0 = Start→CP_A (entered at start, completed at CP_A idx=1)
+                # ...
+                # Segment 5 = CP_E→Finish (entered at CP_E, completed at Start idx=0)
+                if self._next_checkpoint_idx == 0:
+                    seg_idx = NUM_CHECKPOINTS - 1  # last segment
+                else:
+                    seg_idx = self._next_checkpoint_idx - 1
+                self._segment_splits[seg_idx] = segment_steps / TICKS_PER_SECOND
+                self._segment_enter_step = self._step_count
+
                 if self._next_checkpoint_idx == 0:
                     # Crossed start/goal → lap complete
                     reward += REWARD_LAP_COMPLETE
+                    self._lap_complete = True
                     logger.info(">>> LAP COMPLETE!")
                 else:
                     reward += REWARD_CHECKPOINT
@@ -938,6 +979,20 @@ class HorseRaceEnv(gym.Env):
             curr_dist = self._dist_to_checkpoint(pos, target_cp)
             delta = prev_dist - curr_dist  # positive = getting closer
             reward += REWARD_PROGRESS * delta
+
+        # ---- 2b. Wrong-direction penalty (going backward) --------------
+        #  Detect if the agent is heading backward by checking whether it
+        #  is getting closer to the *previous* checkpoint rather than the
+        #  next one.  This catches the agent trying to short-cut by
+        #  running the loop in reverse.
+        if pos is not None and self._last_pos is not None:
+            prev_cp_idx = (self._next_checkpoint_idx - 1) % NUM_CHECKPOINTS
+            prev_cp = CHECKPOINTS[prev_cp_idx]
+            prev_dist_back = self._dist_to_checkpoint(self._last_pos, prev_cp)
+            curr_dist_back = self._dist_to_checkpoint(pos, prev_cp)
+            if curr_dist_back < prev_dist_back - 0.5:
+                # Agent is moving toward the checkpoint it already passed
+                reward += PENALTY_WRONG_DIRECTION
 
         # ---- 3. Block-type rewards / penalties -------------------------
         if ground_block in ("grass_path", "dirt_path"):
@@ -1029,21 +1084,39 @@ def make_env():
 
 class RewardTrackingCallback(BaseCallback):
     """
-    A stable-baselines3 callback that records the total reward for each
-    completed episode during training.
+    A stable-baselines3 callback that records per-episode statistics
+    during training.
 
-    After training, access the rewards via `callback.episode_rewards`.
+    Tracked metrics (access after training):
+      - ``episode_rewards``   — total reward per episode
+      - ``episode_durations`` — total episode time in seconds (None if lap not completed)
+      - ``segment_times``     — list of 6-element lists; each element is the time
+                                in seconds for that segment, or None if not completed
+      - ``completion_rates``  — fraction of checkpoints reached (0.0–1.0)
     """
 
     def __init__(self, verbose=0):
         super().__init__(verbose)
         self.episode_rewards: List[float] = []
+        self.episode_durations: List[Optional[float]] = []
+        self.segment_times: List[List[Optional[float]]] = []
+        self.completion_rates: List[float] = []
         self._current_rewards: List[float] = []
 
     def _on_training_start(self):
         """Initialise per-environment reward accumulators."""
         n_envs = self.training_env.num_envs
         self._current_rewards = [0.0] * n_envs
+
+    def _get_inner_env(self, vec_env_idx: int):
+        """Navigate through SB3 VecEnv wrappers to reach HorseRaceEnv."""
+        # VecTransposeImage wraps DummyVecEnv; DummyVecEnv.envs is a list
+        venv = self.training_env
+        # Walk through VecEnvWrapper layers to find DummyVecEnv
+        while hasattr(venv, "venv"):
+            venv = venv.venv
+        # DummyVecEnv stores envs as a list
+        return venv.envs[vec_env_idx]
 
     def _on_step(self) -> bool:
         """Called after each environment step."""
@@ -1056,10 +1129,48 @@ class RewardTrackingCallback(BaseCallback):
                 self.episode_rewards.append(self._current_rewards[i])
                 self._current_rewards[i] = 0.0
 
+                # --- Collect timing / completion stats from inner env ---
+                try:
+                    inner_env = self._get_inner_env(i)
+                    # Episode duration (seconds)
+                    if inner_env._lap_complete:
+                        total_steps = (inner_env._step_count
+                                       - inner_env._episode_start_step)
+                        self.episode_durations.append(
+                            total_steps / TICKS_PER_SECOND
+                        )
+                    else:
+                        self.episode_durations.append(None)
+
+                    # Segment splits (already in seconds)
+                    self.segment_times.append(
+                        list(inner_env._segment_splits)
+                    )
+
+                    # Completion rate: how many checkpoints were reached
+                    reached = sum(
+                        1 for t in inner_env._checkpoint_times if t is not None
+                    )
+                    self.completion_rates.append(reached / NUM_CHECKPOINTS)
+
+                except Exception as e:
+                    logger.warning(
+                        f"Could not read stats from inner env: {e}"
+                    )
+                    self.episode_durations.append(None)
+                    self.segment_times.append([None] * NUM_CHECKPOINTS)
+                    self.completion_rates.append(0.0)
+
                 if self.verbose > 0:
+                    ep_num = len(self.episode_rewards)
+                    dur = self.episode_durations[-1]
+                    rate = self.completion_rates[-1]
+                    dur_str = f"{dur:.1f}s" if dur is not None else "DNF"
                     logger.info(
-                        f"Episode {len(self.episode_rewards)} — "
-                        f"Total Reward: {self.episode_rewards[-1]:.2f}"
+                        f"Episode {ep_num} — "
+                        f"Reward: {self.episode_rewards[-1]:.2f}  "
+                        f"Duration: {dur_str}  "
+                        f"Completion: {rate:.0%}"
                     )
 
         return True  # Continue training
@@ -1117,6 +1228,247 @@ def plot_rewards(
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
     logger.info(f"Reward plot saved to {save_path}")
+
+
+def plot_race_time(
+    episode_durations: List[Optional[float]],
+    window: int = 20,
+    save_path: str = RACE_TIME_PLOT_PATH,
+):
+    """
+    Plot the total time to complete the full lap per episode.
+
+    Episodes where the lap was not completed (None) are shown as red
+    '×' markers at a visual sentinel position. Completed episodes are
+    plotted as dots with a rolling-average line.  Gaps are preserved
+    between completed data points when separated by DNF episodes.
+
+    Args:
+        episode_durations: Time in seconds per episode, or None for DNF.
+        window:            Rolling-average window size.
+        save_path:         File path to save the plot image.
+    """
+    if not episode_durations:
+        logger.warning("No episode durations to plot.")
+        return
+
+    episodes = np.arange(1, len(episode_durations) + 1)
+    # Build arrays with NaN for DNF episodes so matplotlib leaves gaps
+    durations = np.array(
+        [d if d is not None else np.nan for d in episode_durations],
+        dtype=float,
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Plot completed episodes (scatter so gaps are visible)
+    completed_mask = ~np.isnan(durations)
+    if completed_mask.any():
+        ax.scatter(
+            episodes[completed_mask],
+            durations[completed_mask],
+            s=12, alpha=0.5, color="steelblue", label="Completed",
+        )
+
+    # Plot DNF markers
+    dnf_mask = np.isnan(durations)
+    if dnf_mask.any():
+        # Place DNF markers at the top of the plot area
+        sentinel = MAX_EPISODE_STEPS / TICKS_PER_SECOND
+        ax.scatter(
+            episodes[dnf_mask],
+            [sentinel] * int(dnf_mask.sum()),
+            s=30, marker="x", color="crimson", alpha=0.6,
+            label="Did Not Finish",
+        )
+
+    # Rolling average over completed times only (with NaN-aware method)
+    if completed_mask.sum() >= window:
+        # Compute rolling mean manually, skipping NaNs
+        rolling_vals = []
+        rolling_eps = []
+        for j in range(len(durations)):
+            win_start = max(0, j - window + 1)
+            win_slice = durations[win_start:j + 1]
+            valid = win_slice[~np.isnan(win_slice)]
+            if len(valid) >= window:
+                rolling_vals.append(np.mean(valid[-window:]))
+                rolling_eps.append(episodes[j])
+        if rolling_vals:
+            ax.plot(
+                rolling_eps, rolling_vals,
+                color="steelblue", linewidth=2,
+                label=f"Rolling Avg (window={window})",
+            )
+
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Time (seconds)")
+    ax.set_title("Horse Race PPO — Lap Completion Time")
+    ax.legend(loc="upper right")
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    logger.info(f"Race time plot saved to {save_path}")
+
+
+# Segment labels for the 6 track sections
+_SEGMENT_LABELS = [
+    "Start → CP_A",
+    "CP_A → CP_B",
+    "CP_B → CP_C",
+    "CP_C → CP_D",
+    "CP_D → CP_E",
+    "CP_E → Finish",
+]
+
+
+def plot_segment_times(
+    segment_times: List[List[Optional[float]]],
+    window: int = 20,
+    save_path: str = SEGMENT_TIME_PLOT_PATH,
+):
+    """
+    Plot a 2×3 grid of subplots, one per track segment.
+
+    Each subplot shows the time (seconds) to complete that segment per
+    episode.  Episodes where the segment was not completed are left as
+    gaps (NaN) so the line does not connect across them.
+
+    Args:
+        segment_times: List of 6-element lists (one per episode).
+                       Each element is seconds or None.
+        window:        Rolling-average window size.
+        save_path:     File path to save the combined plot image.
+    """
+    if not segment_times:
+        logger.warning("No segment times to plot.")
+        return
+
+    n_episodes = len(segment_times)
+    episodes = np.arange(1, n_episodes + 1)
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True)
+    axes_flat = axes.flatten()
+
+    for seg_idx in range(NUM_CHECKPOINTS):
+        ax = axes_flat[seg_idx]
+        # Extract this segment's times across all episodes
+        times = np.array(
+            [
+                ep[seg_idx] if ep[seg_idx] is not None else np.nan
+                for ep in segment_times
+            ],
+            dtype=float,
+        )
+
+        completed_mask = ~np.isnan(times)
+        n_completed = int(completed_mask.sum())
+
+        # Scatter completed times (gaps where NaN)
+        if n_completed > 0:
+            ax.scatter(
+                episodes[completed_mask],
+                times[completed_mask],
+                s=10, alpha=0.5, color="teal",
+            )
+
+        # Rolling average (NaN-aware, same approach as race time)
+        if n_completed >= window:
+            rolling_vals = []
+            rolling_eps = []
+            for j in range(n_episodes):
+                win_start = max(0, j - window + 1)
+                win_slice = times[win_start:j + 1]
+                valid = win_slice[~np.isnan(win_slice)]
+                if len(valid) >= window:
+                    rolling_vals.append(np.mean(valid[-window:]))
+                    rolling_eps.append(episodes[j])
+            if rolling_vals:
+                ax.plot(
+                    rolling_eps, rolling_vals,
+                    color="teal", linewidth=2,
+                )
+
+        label = _SEGMENT_LABELS[seg_idx] if seg_idx < len(_SEGMENT_LABELS) else f"Segment {seg_idx}"
+        ax.set_title(label, fontsize=10)
+        ax.set_ylabel("Time (s)", fontsize=8)
+        ax.tick_params(labelsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Annotation: completed count
+        ax.text(
+            0.98, 0.95,
+            f"Completed: {n_completed}/{n_episodes}",
+            transform=ax.transAxes,
+            fontsize=7, ha="right", va="top",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7),
+        )
+
+    # Common X label on bottom row
+    for ax in axes_flat[3:]:
+        ax.set_xlabel("Episode", fontsize=9)
+
+    fig.suptitle("Horse Race PPO — Segment Split Times", fontsize=13)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    logger.info(f"Segment times plot saved to {save_path}")
+
+
+def plot_completion_rate(
+    completion_rates: List[float],
+    window: int = 20,
+    save_path: str = COMPLETION_RATE_PLOT_PATH,
+):
+    """
+    Plot the fraction of checkpoints the agent reached per episode.
+
+    Args:
+        completion_rates: Values in [0.0, 1.0], one per episode.
+        window:           Rolling-average window size.
+        save_path:        File path to save the plot image.
+    """
+    if not completion_rates:
+        logger.warning("No completion rates to plot.")
+        return
+
+    episodes = np.arange(1, len(completion_rates) + 1)
+    rates = np.array(completion_rates)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(
+        episodes, rates * 100,
+        alpha=0.3, color="darkorange", label="Episode Completion %",
+    )
+
+    # Rolling average
+    if len(rates) >= window:
+        rolling = np.convolve(rates, np.ones(window) / window, mode="valid")
+        ax.plot(
+            episodes[window - 1:],
+            rolling * 100,
+            color="darkorange", linewidth=2,
+            label=f"Rolling Avg (window={window})",
+        )
+
+    # Reference lines
+    ax.axhline(0, color="gray", linestyle="--", linewidth=0.5)
+    ax.axhline(50, color="gray", linestyle="--", linewidth=0.5)
+    ax.axhline(100, color="gray", linestyle="--", linewidth=0.5)
+
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Track Completion (%)")
+    ax.set_ylim(-5, 105)
+    ax.set_title("Horse Race PPO — Track Completion Rate")
+    ax.legend(loc="upper left")
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    logger.info(f"Completion rate plot saved to {save_path}")
 
 
 # ===========================================================================
@@ -1221,6 +1573,15 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
 
     # Plot the training reward curve
     plot_rewards(reward_callback.episode_rewards)
+
+    # Plot race time per episode
+    plot_race_time(reward_callback.episode_durations)
+
+    # Plot segment split times (2×3 grid)
+    plot_segment_times(reward_callback.segment_times)
+
+    # Plot track completion rate
+    plot_completion_rate(reward_callback.completion_rates)
 
     # Clean up
     env.close()
