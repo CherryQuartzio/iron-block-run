@@ -10,9 +10,12 @@ services:
       TEMP: /opt/tmp
       TMP: /opt/tmp
       JAVA_HOME: /opt/conda
+      DISPLAY: ${DISPLAY}
     volumes:
       - .:/workspace
       - minerl-tmp:/opt/tmp
+      - ${HOME}/.Xauthority:/root/.Xauthority:rw
+    network_mode: host
     shm_size: "4gb"
     stdin_open: true
     tty: true
