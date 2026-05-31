@@ -205,19 +205,24 @@ def prepare_world_zip(world_dir: str) -> str:
 
     logger.info("Preparing world zip: %s -> %s", world_dir, zip_path)
 
+    import time
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Walk the world directory and add all files under
-        # the prefix structure: _/saves/<world_name>/...
-        # Skip session.lock to prevent Minecraft from rejecting the world.
-        prefix = os.path.join("_", "saves", world_name)
         for root, dirs, files in os.walk(world_dir):
             for fname in files:
                 if fname == "session.lock":
                     continue
                 abs_path = os.path.join(root, fname)
-                rel_path = os.path.relpath(abs_path, world_dir)
-                arc_name = os.path.join(prefix, rel_path)
-                zf.write(abs_path, arc_name)
+                rel_path = os.path.relpath(abs_path, world_dir).replace(os.sep, "/")
+                # Verbatim "./saves/<world>/..." so that:
+                #   - listZip()[0].split("/")[2] == world_name   (Java reads index 2)
+                #   - Java's new File(dir, "./saves/...") -> dir/saves/...  (where loadWorld reads)
+                # NOTE: zf.write() would run os.path.normpath and strip the "./",
+                #       so the name must be set verbatim through ZipInfo.
+                arc_name = f"./saves/{world_name}/{rel_path}"
+                zi = zipfile.ZipInfo(arc_name, date_time=time.localtime(os.path.getmtime(abs_path))[:6])
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                with open(abs_path, "rb") as fh:
+                    zf.writestr(zi, fh.read())
 
     WORLD_ZIP = zip_path
     logger.info("World zip ready: %s (WORLD_ZIP set)", zip_path)
@@ -1492,45 +1497,6 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     # VecTransposeImage converts observations from (H, W, C) to (C, H, W)
     # which is the format expected by PyTorch CNN policies.
     env = VecTransposeImage(env)
-
-    # ------------------------------------------------------------------
-    #  Visual Encoder Plug-in Point
-    # ------------------------------------------------------------------
-    #
-    #  By default, PPO("CnnPolicy", ...) uses stable-baselines3's built-in
-    #  NatureCNN as the visual feature extractor. If you want to use a
-    #  different visual encoder (e.g., a deeper CNN, IMPALA, ResNet, or a
-    #  pretrained ViT), you can swap it in via the `policy_kwargs` argument:
-    #
-    #      from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-    #      import torch.nn as nn
-    #
-    #      class MyCustomEncoder(BaseFeaturesExtractor):
-    #          """
-    #          Custom visual encoder that replaces NatureCNN.
-    #          Must accept observation_space in __init__ and expose
-    #          self._features_dim (int) indicating the output feature size.
-    #          """
-    #          def __init__(self, observation_space, features_dim=512):
-    #              super().__init__(observation_space, features_dim)
-    #              # ... define your CNN / ViT / etc layers here ...
-    #
-    #          def forward(self, observations):
-    #              # observations: (batch, C, H, W) float32 in [0, 1]
-    #              # return: (batch, features_dim) float32
-    #              ...
-    #
-    #  Then pass it to PPO like this:
-    #
-    #      policy_kwargs = dict(
-    #          features_extractor_class=MyCustomEncoder,
-    #          features_extractor_kwargs=dict(features_dim=512),
-    #      )
-    #      model = PPO("CnnPolicy", env, policy_kwargs=policy_kwargs, ...)
-    #
-    #  The rest of the training pipeline remains unchanged — SB3 handles
-    #  connecting the encoder output to the policy and value heads.
-    # ------------------------------------------------------------------
 
     logger.info("Initialising PPO with CnnPolicy...")
 
