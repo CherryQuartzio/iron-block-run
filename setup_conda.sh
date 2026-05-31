@@ -30,7 +30,7 @@ echo "Upgrading pip..."
 python -m pip install --upgrade pip
 
 echo "Installing additional dependencies..."
-python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy
+python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy nbtlib
 
 echo "Installing MineRL..."
 python -m pip install --no-cache-dir git+https://github.com/minerllabs/minerl

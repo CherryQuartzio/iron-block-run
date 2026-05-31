@@ -18,8 +18,11 @@ import logging
 import collections
 import zipfile
 import tempfile
+import math
+import shutil
 from typing import List
 
+import nbtlib
 import gym
 from typing import Optional, Tuple
 import numpy as np
@@ -42,7 +45,6 @@ VISUALIZE = True
 from minerl.herobraine.env_spec import EnvSpec
 from minerl.herobraine.env_specs.human_controls import HumanControlEnvSpec
 from minerl.herobraine.hero import handlers
-from minerl.herobraine.hero.handlers.server.world import DrawingDecorator
 from minerl.herobraine.hero.handlers.agent.start import (
     AgentStartPlacement,
     DoneOnDeath,
@@ -65,14 +67,23 @@ WORLD_ZIP = None  # Set at runtime by prepare_world_zip()
 
 # -- Agent spawn --
 SPAWN_X = -73.0
-SPAWN_Y = 100.0     # Adjust Y to match your world's ground level at (0, Z=0)
+SPAWN_Y = 71.0      # Ground level at spawn (world block surface ~Y=70)
 SPAWN_Z = -149.0
-SPAWN_YAW = 180.0    # Facing +Z direction (toward the horse / race track start)
+SPAWN_YAW = 180.0    # Facing -Z (toward the race track start)
 
 # -- Horse spawn (directly in front of agent) --
-HORSE_X = SPAWN_X
+HORSE_DISTANCE = 2
+_HORSE_YAW_RAD = math.radians(SPAWN_YAW)
+HORSE_X = SPAWN_X - math.sin(_HORSE_YAW_RAD) * HORSE_DISTANCE
 HORSE_Y = SPAWN_Y       # Same ground level as agent
-HORSE_Z = SPAWN_Z+2        # 2 blocks ahead of the agent
+HORSE_Z = SPAWN_Z + math.cos(_HORSE_YAW_RAD) * HORSE_DISTANCE
+
+# Applied in patches/EnvServer.java configureSpawnedHorse() (not via DrawEntity NBT).
+HORSE_MOVEMENT_SPEED = 0.2
+HORSE_JUMP_STRENGTH = 0.85
+HORSE_MAX_HEALTH = 20.0
+HORSE_HEALTH = 20.0
+HORSE_VARIANT = 1029
 
 # -- Observation --
 OBS_WIDTH = 144
@@ -175,6 +186,23 @@ logger = logging.getLogger(__name__)
 #  0. World Zip Preparation
 # ===========================================================================
 
+def _sanitize_world_staging(staging_dir: str) -> None:
+    """Force survival mode and drop saved player state from the staging copy."""
+    level_dat = os.path.join(staging_dir, "level.dat")
+    if os.path.isfile(level_dat):
+        nbt = nbtlib.load(level_dat)
+        if "Data" in nbt:
+            nbt["Data"]["GameType"] = nbtlib.Int(0)
+            nbt["Data"]["allowCommands"] = nbtlib.Byte(0)
+        nbt.save(level_dat)
+
+    playerdata_dir = os.path.join(staging_dir, "playerdata")
+    if os.path.isdir(playerdata_dir):
+        for fname in os.listdir(playerdata_dir):
+            if fname.endswith(".dat"):
+                os.remove(os.path.join(playerdata_dir, fname))
+
+
 def prepare_world_zip(world_dir: str) -> str:
     """
     Create a zip file of the custom world in the structure expected by
@@ -202,17 +230,23 @@ def prepare_world_zip(world_dir: str) -> str:
     world_name = os.path.basename(world_dir)  # e.g. "world"
     zip_dir = tempfile.mkdtemp(prefix="minerl_world_")
     zip_path = os.path.join(zip_dir, f"{world_name}.zip")
+    staging_dir = os.path.join(tempfile.mkdtemp(prefix="minerl_world_stage_"), world_name)
 
     logger.info("Preparing world zip: %s -> %s", world_dir, zip_path)
 
+    shutil.copytree(
+        world_dir,
+        staging_dir,
+        ignore=shutil.ignore_patterns("session.lock"),
+    )
+    _sanitize_world_staging(staging_dir)
+
     import time
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, dirs, files in os.walk(world_dir):
+        for root, dirs, files in os.walk(staging_dir):
             for fname in files:
-                if fname == "session.lock":
-                    continue
                 abs_path = os.path.join(root, fname)
-                rel_path = os.path.relpath(abs_path, world_dir).replace(os.sep, "/")
+                rel_path = os.path.relpath(abs_path, staging_dir).replace(os.sep, "/")
                 # Verbatim "./saves/<world>/..." so that:
                 #   - listZip()[0].split("/")[2] == world_name   (Java reads index 2)
                 #   - Java's new File(dir, "./saves/...") -> dir/saves/...  (where loadWorld reads)
@@ -281,6 +315,29 @@ class BlockGridHandler(Handler):
         )
 
 
+class HorseSpawnDecorator(Handler):
+    """
+    Emits a DrawingDecorator with nested DrawEntity XML.
+
+    The stock DrawingDecorator handler HTML-escapes inner XML under Jinja2
+    autoescape, which prevents Malmo from parsing DrawEntity children.
+    """
+
+    MALMO_NS = "http://ProjectMalmo.microsoft.com"
+
+    def __init__(self, draw_entity_xml: str):
+        self.draw_entity_xml = draw_entity_xml
+
+    def to_string(self) -> str:
+        return "horse_spawn_decorator"
+
+    def xml_template(self) -> str:
+        return "<DrawingDecorator></DrawingDecorator>"
+
+    def xml(self) -> str:
+        return f"<DrawingDecorator>{self.draw_entity_xml}</DrawingDecorator>"
+
+
 # ===========================================================================
 #  1b. Environment Specification (herobraine)
 # ===========================================================================
@@ -326,17 +383,15 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
         Spawn a tamed, saddled horse directly in front of the agent.
 
         Uses Malmo XML DrawEntity to place the horse at HORSE_X/Y/Z.
-        The horse is pre-tamed (Tame:1b) and given a saddle so the agent can
-        mount it immediately.
+        EnvServer configures tame, saddle, variant, health, and attributes
+        (see HORSE_* constants) after spawn.
         """
-        return [
-            DrawingDecorator(
-                f'<DrawEntity x="{HORSE_X}" y="{HORSE_Y}" z="{HORSE_Z}" yaw="{SPAWN_YAW}"'
-                f'type="minecraft:horse">'
-                f'<NBTData>{{Tame:1b, SaddleItem:{{id:"minecraft:saddle",Count:1b}}, Attributes:[{{Name:"minecraft:generic.movement_speed",Base:0.2}}, {{Name:"minecraft:horse.jump_strength",Base:.85}}, {{Name:"minecraft:generic.max_health",Base:20.0}}],  Health:20.0f,  Variant:1029}}</NBTData>'
-                f'</DrawEntity>'
-            )
-        ]
+        draw_entity = (
+            f'<DrawEntity xmlns="{HorseSpawnDecorator.MALMO_NS}" '
+            f'x="{HORSE_X}" y="{HORSE_Y}" z="{HORSE_Z}" '
+            f'yaw="{SPAWN_YAW}" type="Horse"/>'
+        )
+        return [HorseSpawnDecorator(draw_entity)]
 
     def create_server_initial_conditions(self) -> List[Handler]:
         """Set the world to noon and disable hostile mob spawning."""
@@ -690,15 +745,27 @@ class HorseRaceEnv(gym.Env):
         """
         # Let the world settle for a few ticks
         noop = self._get_noop_action()
+        pre_mount_y = None
         for _ in range(5):
             obs, _, done, _ = self._env.step(noop)
+            if done:
+                return obs
+            try:
+                pre_mount_y = obs["location_stats"]["ypos"]
+            except (KeyError, TypeError):
+                pass
+
+        # Walk toward the horse (spawned HORSE_DISTANCE blocks ahead along facing)
+        forward = self._map_action(1)
+        for _ in range(HORSE_DISTANCE + 2):
+            obs, _, done, _ = self._env.step(forward)
             if done:
                 return obs
 
         # Mount the horse (right-click / 'use' action)
         mount_action = self._get_noop_action()
         mount_action["use"] = 1
-        for _ in range(3):
+        for _ in range(5):
             obs, _, done, _ = self._env.step(mount_action)
             if done:
                 return obs
@@ -708,6 +775,21 @@ class HorseRaceEnv(gym.Env):
             obs, _, done, _ = self._env.step(noop)
             if done:
                 return obs
+
+        try:
+            post_mount_y = obs["location_stats"]["ypos"]
+            if pre_mount_y is not None and post_mount_y <= pre_mount_y + 0.3:
+                logger.warning(
+                    "Horse mount may have failed (ypos %.2f -> %.2f). "
+                    "Check that the horse spawned at (%.1f, %.1f, %.1f).",
+                    pre_mount_y,
+                    post_mount_y,
+                    HORSE_X,
+                    HORSE_Y,
+                    HORSE_Z,
+                )
+        except (KeyError, TypeError):
+            pass
 
         # TODO: Rotate camera to face the race track start direction.
         #       Adjust the yaw delta below based on your track layout.

@@ -31,6 +31,11 @@ RUN conda install -y -c conda-forge \
     && conda clean --all -f -y
 RUN python -m pip install --upgrade pip
 RUN python -m pip install --no-cache-dir git+https://github.com/minerllabs/minerl
-RUN python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy
+COPY patches/EnvServer.java /tmp/patches/EnvServer.java
+RUN cp /tmp/patches/EnvServer.java \
+    /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/src/main/java/com/minerl/multiagent/env/EnvServer.java \
+    && cd /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn \
+    && ./gradlew shadowJar -x test
+RUN python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy nbtlib
 
 CMD ["bash"]
