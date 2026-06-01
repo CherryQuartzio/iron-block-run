@@ -72,7 +72,16 @@ SPAWN_Z = -149.0
 SPAWN_YAW = 180.0    # Facing -Z (toward the race track start)
 
 # -- Horse spawn (directly in front of agent) --
-HORSE_DISTANCE = 2
+# Blocks ahead of the agent that the DrawEntity decorator spawns the horse.
+HORSE_DISTANCE = 3
+# Max env steps (ticks) spent walking up to and mounting the horse. Each tick
+# is ~0.22 blocks of walking, so this must comfortably exceed HORSE_DISTANCE.
+MOUNT_MAX_STEPS = 25
+
+# Degrees to pitch the camera down before mounting. At pitch 0 the interaction
+# ray points at the horizon and sails over the horse; looking down aims it at
+# the horse's body so 'use' actually targets (and mounts) the horse.
+MOUNT_LOOK_DOWN_DEG = 20.0
 _HORSE_YAW_RAD = math.radians(SPAWN_YAW)
 HORSE_X = SPAWN_X - math.sin(_HORSE_YAW_RAD) * HORSE_DISTANCE
 HORSE_Y = SPAWN_Y       # Same ground level as agent
@@ -440,8 +449,22 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
         ]
 
     def create_actionables(self) -> List[TranslationHandler]:
-        """Standard human-like keyboard + camera actions."""
-        return super().create_actionables()
+        """Human-like keyboard + camera actions, with 'sneak' removed.
+
+        On a horse, sneak (Left Shift) dismounts the rider. Rather than merely
+        force-zeroing it in the wrapper, we drop the handler entirely so 'sneak'
+        is not part of the underlying action space at all.
+        """
+        def _is_sneak(h) -> bool:
+            ident = getattr(h, "command", None)
+            if ident is None and hasattr(h, "to_string"):
+                try:
+                    ident = h.to_string()
+                except Exception:
+                    ident = None
+            return ident == "sneak"
+
+        return [h for h in super().create_actionables() if not _is_sneak(h)]
 
     def create_rewardables(self) -> List[TranslationHandler]:
         """Reward is computed externally in the Gym wrapper."""
@@ -743,6 +766,11 @@ class HorseRaceEnv(gym.Env):
           2. Send 'use' (right-click) to mount the nearby horse
           3. Rotate camera to face the start of the race track
         """
+        # The horse is spawned natively, server-side, by the DrawEntity world
+        # decorator (see create_server_decorators -> EnvServer.spawnDrawEntity),
+        # so there is nothing to spawn here. We only need to walk up to it and
+        # mount it below.
+
         # Let the world settle for a few ticks
         noop = self._get_noop_action()
         pre_mount_y = None
