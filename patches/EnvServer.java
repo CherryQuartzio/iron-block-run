@@ -69,6 +69,9 @@ public class EnvServer {
     private static final int stepServerTagLength = "<StepServer_>".length();
     private boolean iwanttoquit = false;
     private boolean doneOnDeath = false;
+    // Tracks horse-mount state across steps so we can log when (and why) the
+    // player gets dismounted. Reset at the start of each mission.
+    private boolean wasRiding = false;
 
     static final int BYTES_INT = 4;
     static final int BYTES_DOUBLE = 8;
@@ -256,6 +259,7 @@ public class EnvServer {
         // todo world settings and dimension generator settings from mission xml
         Minecraft mc = Minecraft.getInstance();
         missionInit = MissionSpec.decodeMissionInit(command);
+        wasRiding = false;  // reset mount tracking for the new episode
 
         // Manual parsing seed from the token, as done in older code
         // id is string of ":" separated values. The sixth is seed if it exists.
@@ -376,19 +380,26 @@ public class EnvServer {
         }
         ServerHandlers serverHandlers = missionInit.getMission().getServerSection().getServerHandlers();
         if (serverHandlers == null) {
+            LOGGER.warn("[HorseSpawn] serverHandlers is null; no decorators to apply");
             return;
         }
+        int decoratorCount = serverHandlers.getWorldDecorators().size();
+        LOGGER.info("[HorseSpawn] applyWorldDecorators: {} world decorator(s)", decoratorCount);
         for (Object decorator : serverHandlers.getWorldDecorators()) {
+            LOGGER.info("[HorseSpawn] decorator class: {}", decorator.getClass().getName());
             if (!(decorator instanceof DrawingDecorator)) {
                 continue;
             }
             DrawingDecorator drawing = (DrawingDecorator) decorator;
+            int drawCount = drawing.getDrawObjectType().size();
+            LOGGER.info("[HorseSpawn] DrawingDecorator has {} draw object(s)", drawCount);
             for (JAXBElement<? extends DrawObjectType> element : drawing.getDrawObjectType()) {
+                LOGGER.info("[HorseSpawn] draw object: {}", element.getValue().getClass().getName());
                 if (element.getValue() instanceof DrawEntity) {
                     try {
                         spawnDrawEntity((DrawEntity) element.getValue(), world, mc);
                     } catch (Exception e) {
-                        LOGGER.error("Error spawning DrawEntity", e);
+                        LOGGER.error("[HorseSpawn] Error spawning DrawEntity", e);
                     }
                 }
             }
@@ -409,15 +420,17 @@ public class EnvServer {
 
     private void spawnDrawEntity(DrawEntity drawEntity, World world, Minecraft mc) throws Exception {
         String entityName = drawEntity.getType().getValue();
+        LOGGER.info("[HorseSpawn] spawnDrawEntity type='{}' at ({},{},{})",
+            entityName, drawEntity.getX(), drawEntity.getY(), drawEntity.getZ());
         Optional<EntityType<?>> optionalType = resolveEntityType(entityName);
         if (!optionalType.isPresent()) {
-            LOGGER.warn("Unknown entity type: " + entityName);
+            LOGGER.warn("[HorseSpawn] Unknown entity type: " + entityName);
             return;
         }
 
         MinecraftServer server = mc.getIntegratedServer();
         if (server == null) {
-            LOGGER.warn("Cannot spawn entity without integrated server");
+            LOGGER.warn("[HorseSpawn] Cannot spawn entity without integrated server");
             return;
         }
         ServerWorld serverWorld = server.getWorld(World.OVERWORLD);
@@ -451,7 +464,7 @@ public class EnvServer {
         }
 
         if (entity == null) {
-            LOGGER.warn("Could not spawn entity for type: " + entityName);
+            LOGGER.warn("[HorseSpawn] Could not spawn entity for type: " + entityName);
             return;
         }
 
@@ -463,6 +476,8 @@ public class EnvServer {
         if (entity instanceof AbstractHorseEntity) {
             ((AbstractHorseEntity) entity).setPositionAndUpdate(x, y, z);
         }
+        LOGGER.info("[HorseSpawn] spawned {} -> isAlive={} at ({},{},{})",
+            entity.getClass().getSimpleName(), entity.isAlive(), x, y, z);
     }
 
     private void configureSpawnedHorse(
@@ -474,6 +489,22 @@ public class EnvServer {
         float yaw
     ) {
         horse.setLocationAndAngles(x, y, z, yaw, 0);
+
+        // Set the visual variant FIRST. readAdditional() deserializes a *full*
+        // horse NBT, so every field missing from this partial tag is reset to
+        // its default -- crucially setHorseTamed(getBoolean("Tame")) reads false
+        // when "Tame" is absent, un-taming the horse. An untamed-but-saddled
+        // horse bucks the rider (the black "angry" particles seen on dismount).
+        // Doing this before the taming/saddle/attribute setup below means those
+        // are applied last and stick. We also include Tame in the tag so the
+        // deserialize itself keeps the horse tamed.
+        if (horse instanceof HorseEntity) {
+            CompoundNBT variantNbt = new CompoundNBT();
+            variantNbt.putInt("Variant", HORSE_VARIANT);
+            variantNbt.putBoolean("Tame", true);
+            ((HorseEntity) horse).readAdditional(variantNbt);
+        }
+
         horse.setHorseTamed(true);
         if (mc.player != null) {
             horse.setOwnerUniqueId(mc.player.getUniqueID());
@@ -484,12 +515,6 @@ public class EnvServer {
         horse.getAttribute(Attributes.HORSE_JUMP_STRENGTH).setBaseValue(HORSE_JUMP_STRENGTH);
         horse.getAttribute(Attributes.MAX_HEALTH).setBaseValue(HORSE_MAX_HEALTH);
         horse.setHealth(HORSE_HEALTH);
-
-        if (horse instanceof HorseEntity) {
-            CompoundNBT variantNbt = new CompoundNBT();
-            variantNbt.putInt("Variant", HORSE_VARIANT);
-            ((HorseEntity) horse).readAdditional(variantNbt);
-        }
     }
 
     private String getSaveFile(MissionInit missionInit) {
@@ -513,6 +538,10 @@ public class EnvServer {
         settings.fakeCursorSize = agentStart.getFakeCursorSize();
         float guiScale = agentStart.getGuiScale();
         settings.setSoundLevel(SoundCategory.MASTER, 0.0f);
+        // Start with the HUD visible during the mount sequence; stepClient() hides
+        // it automatically once the player is actually riding the horse (native
+        // equivalent of pressing F1 after a successful mount).
+        settings.hideGUI = false;
 
         MainWindow window = mc.getMainWindow();
         getAgentHandlers().filter(h -> h instanceof VideoProducer).forEach(h -> {
@@ -683,6 +712,22 @@ public class EnvServer {
         envTickCounter = PlayRecorder.getInstance().getTickCounter();
         execActions(actions, options);
         waitForNextObservation();
+        // Hide the HUD once mounted, show it otherwise. Tied to actual riding
+        // state so the GUI toggles off only after a successful horse mount.
+        if (mc.player != null) {
+            boolean riding = mc.player.isPassenger();
+            if (mc.gameSettings != null) {
+                mc.gameSettings.hideGUI = riding;
+            }
+            // Diagnostic: log the exact tick the player leaves the horse, and
+            // whether they are still alive (alive=true => a real dismount, not a
+            // death; the episode is not ending here).
+            if (wasRiding && !riding) {
+                LOGGER.warn("[Dismount] player left the horse at tick {} (alive={})",
+                    PlayRecorder.getInstance().getTickCounter(), mc.player.isAlive());
+            }
+            wasRiding = riding;
+        }
         byte[] obs = getPOVObservation();
         boolean done = mc.player == null || !mc.player.isAlive() || (this.doneOnDeath && mc.isHasPlayerRespawned());
         boolean sent = true;

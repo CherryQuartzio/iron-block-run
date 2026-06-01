@@ -750,7 +750,7 @@ class HorseRaceEnv(gym.Env):
                 f"Yaw={yaw:6.1f}° Pitch={pitch:6.1f}°"
             )
         except Exception as e:
-            logger.debug(f"Could not extract position: {e}")
+            logger.info(f"Could not extract position: {e}")
 
     # -- Horse mounting --------------------------------------------------
 
@@ -783,18 +783,41 @@ class HorseRaceEnv(gym.Env):
             except (KeyError, TypeError):
                 pass
 
-        # Walk toward the horse (spawned HORSE_DISTANCE blocks ahead along facing)
-        forward = self._map_action(1)
-        for _ in range(HORSE_DISTANCE + 2):
-            obs, _, done, _ = self._env.step(forward)
+        # Look down at the horse so the 'use' interaction ray hits its body. At
+        # pitch 0 the crosshair points at the horizon and passes over the horse,
+        # so the agent would right-click empty air and never mount.
+        look_down = self._get_noop_action()
+        look_down["camera"] = np.array([MOUNT_LOOK_DOWN_DEG, 0.0], dtype=np.float32)
+        obs, _, done, _ = self._env.step(look_down)
+        if done:
+            return obs
+
+        # Walk toward the horse while right-clicking to mount it. Each env step
+        # is a single tick (~0.22 blocks of walking), so a fixed short walk
+        # never reaches a horse a few blocks ahead; instead step forward with
+        # 'use' held until ypos jumps (mounted) or the budget is exhausted. If
+        # the horse spawned right on top of the agent, the first tick mounts and
+        # we break before walking past it.
+        approach = self._map_action(1)   # forward
+        approach["use"] = 1              # right-click: mounts once in reach
+        mounted = False
+        for _ in range(MOUNT_MAX_STEPS):
+            obs, _, done, _ = self._env.step(approach)
             if done:
                 return obs
+            try:
+                y = obs["location_stats"]["ypos"]
+            except (KeyError, TypeError):
+                continue
+            if pre_mount_y is not None and y > pre_mount_y + 0.3:
+                mounted = True
+                break  # mounted: ypos rose onto the horse's back
 
-        # Mount the horse (right-click / 'use' action)
-        mount_action = self._get_noop_action()
-        mount_action["use"] = 1
-        for _ in range(5):
-            obs, _, done, _ = self._env.step(mount_action)
+        # Restore a level view for the policy (undo the mount look-down).
+        if mounted:
+            look_up = self._get_noop_action()
+            look_up["camera"] = np.array([-MOUNT_LOOK_DOWN_DEG, 0.0], dtype=np.float32)
+            obs, _, done, _ = self._env.step(look_up)
             if done:
                 return obs
 
@@ -861,6 +884,8 @@ class HorseRaceEnv(gym.Env):
         if pos is not None:
             self._last_pos = pos
             self._position_history.append(pos)
+
+        # (The HUD is hidden natively via GameSettings.hideGUI in EnvServer.java.)
 
         processed = self._preprocess_obs(obs)
         self._prev_obs = processed
@@ -1601,6 +1626,8 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     Args:
         total_timesteps: Total number of environment steps to train for.
     """
+
+
     logger.info("Creating vectorised environment...")
     env = DummyVecEnv([make_env()])
 
@@ -1636,6 +1663,11 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
 
     # Set up reward tracking
     reward_callback = RewardTrackingCallback(verbose=1)
+
+    # NB: the HUD is toggled inside the first reset() (after the horse mount),
+    # once Minecraft has actually launched. Waiting for the window here is
+    # pointless because the env (and thus the window) only comes up once
+    # model.learn() starts stepping.
 
     logger.info(f"Starting training for {total_timesteps:,} timesteps...")
     model.learn(
