@@ -35,7 +35,7 @@ RUN python -m pip install --no-cache-dir git+https://github.com/minerllabs/miner
 # --- Patch-independent layers --------------------------------------------
 # Everything that does NOT depend on patches/* lives above the COPY below, so
 # editing a patch never invalidates these (potentially slow) install layers.
-RUN python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy nbtlib
+RUN python -m pip install --no-cache-dir stable-baselines3 opencv-python shimmy nbtlib tensorboard
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \

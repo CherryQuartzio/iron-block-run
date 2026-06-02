@@ -14,12 +14,14 @@ Usage:
     xvfb-run python agent.py
 """
 import os
+import glob
 import logging
 import collections
 import zipfile
 import tempfile
 import math
 import shutil
+from datetime import datetime
 from typing import List
 
 import nbtlib
@@ -99,6 +101,13 @@ OBS_WIDTH = 144
 OBS_HEIGHT = 144
 NATIVE_RES = (640, 360)  # MineRL v1.0.2 native POV resolution (width, height)
 
+# -- Render window (noVNC) --
+# Match the Xvfb screen size in gui_entry.sh ("-screen 0 1980x1080x24") so the
+# visualization fills and centers on the noVNC page. Keep these in sync.
+VNC_SCREEN_W = 1980
+VNC_SCREEN_H = 1080
+RENDER_WINDOW_NAME = "HorseRace"
+
 # -- Training hyperparameters --
 TOTAL_TIMESTEPS = 100_000
 LEARNING_RATE = 3e-4
@@ -110,8 +119,22 @@ GAE_LAMBDA = 0.95
 CLIP_RANGE = 0.2
 MAX_EPISODE_STEPS = 6000  # ~5 minutes at 20 tps
 
+# -- Model persistence --
+# Trained checkpoints are written to SAVED_AGENT_DIR as timestamped zips, e.g.
+#   saved_agents/saved_agent_20260601_160712.zip
+# To resume from a specific one, unzip (or copy) it into LOAD_AGENT_DIR
+# ("./agent"). On startup the model in ./agent is loaded if present; otherwise a
+# fresh agent is trained. The newest checkpoint is NOT auto-loaded.
+SAVED_AGENT_DIR = "saved_agents"
+SAVED_AGENT_PREFIX = "saved_agent"
+LOAD_AGENT_DIR = "agent"
+
+# -- TensorBoard --
+# Training metrics are written here; view with `tensorboard --logdir tb_logs`.
+# Each run gets its own timestamped subdirectory (see tb_log_name in train()).
+TENSORBOARD_LOG_DIR = "tb_logs"
+
 # -- Output --
-MODEL_SAVE_PATH = "horse_race_ppo"
 REWARD_PLOT_PATH = "training_rewards.png"
 RACE_TIME_PLOT_PATH = "training_race_time.png"
 SEGMENT_TIME_PLOT_PATH = "training_segment_times.png"
@@ -189,6 +212,81 @@ CHARGE_JUMP_TICKS = 10  # How many ticks to hold jump for fence clearing
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Process-wide handle to the live PPO model, set once training starts. The
+# on-frame Save button reads this so it works no matter which env instance (or
+# wrapper layer) ends up handling the click.
+_ACTIVE_MODEL = None
+
+
+def set_active_model(model) -> None:
+    """Register the live model for the on-frame Save control."""
+    global _ACTIVE_MODEL
+    _ACTIVE_MODEL = model
+
+
+# ===========================================================================
+#  Model persistence helpers
+# ===========================================================================
+
+def resolve_load_path(directory: str = LOAD_AGENT_DIR) -> Optional[str]:
+    """Return a zip path that ``PPO.load()`` can consume from ``./agent``, or None.
+
+    Loading is intentionally limited to the fixed ``LOAD_AGENT_DIR`` — the newest
+    checkpoint is NOT auto-loaded. To resume from a specific saved agent, place it
+    in ``./agent``. Three layouts are accepted:
+
+      1. ``./agent.zip``                   — a model zip file
+      2. ``./agent/<something>.zip``       — a model zip dropped inside the dir
+      3. ``./agent/`` with the SB3 model   — i.e. a checkpoint **unzipped** into
+         the directory (loose ``data`` + ``policy*.pth`` files); these are
+         re-zipped to a temp archive on the fly so SB3 can read them.
+
+    Returns None when ``./agent`` is absent or holds nothing loadable, in which
+    case train() starts a fresh model.
+    """
+    # 1. ./agent.zip
+    if os.path.isfile(directory + ".zip"):
+        return directory + ".zip"
+
+    if not os.path.isdir(directory):
+        return None
+
+    # 2. A .zip placed inside ./agent
+    zips = sorted(glob.glob(os.path.join(directory, "*.zip")))
+    if zips:
+        return zips[-1]
+
+    # 3. An unzipped SB3 model (loose files) -> re-zip to a temp archive.
+    has_data = os.path.isfile(os.path.join(directory, "data"))
+    has_policy = bool(glob.glob(os.path.join(directory, "policy*.pth")))
+    if has_data and has_policy:
+        tmp_zip = os.path.join(tempfile.mkdtemp(prefix="agent_load_"), "agent.zip")
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(directory):
+                for fname in files:
+                    abs_path = os.path.join(root, fname)
+                    # Store at the archive root (mirrors SB3's zip layout).
+                    zf.write(abs_path, os.path.relpath(abs_path, directory))
+        logger.info("Re-zipped unzipped model in '%s/' -> %s", directory, tmp_zip)
+        return tmp_zip
+
+    logger.warning(
+        "'%s/' exists but holds no loadable model (need a .zip or unzipped "
+        "SB3 files). Training a fresh agent.", directory,
+    )
+    return None
+
+
+def new_checkpoint_path(directory: str = SAVED_AGENT_DIR) -> str:
+    """Build a timestamped checkpoint path (no extension; SB3 appends ``.zip``).
+
+    Creates *directory* if needed and returns e.g.
+    ``saved_agent/saved_agent_20260601_160712``.
+    """
+    os.makedirs(directory, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(directory, f"{SAVED_AGENT_PREFIX}_{stamp}")
 
 
 # ===========================================================================
@@ -581,9 +679,19 @@ class HorseRaceEnv(gym.Env):
         if self._visualize and self._video_path is not None and _CV2_AVAILABLE:
             # Initialize video writer lazily on first frame when we know frame size
             self._video_writer = None
+        # The fullscreen render window is created lazily on the first render()
+        self._render_window_ready = False
+
+        # Interactive controls (hotkeys + on-frame buttons), handled in render().
+        self._model = None       # PPO ref injected by RewardTrackingCallback (for Save)
+        self._paused = False
+        self._buttons = []       # (cmd, label, x1, y1, x2, y2) in canvas coordinates
+        self._flash_msg = ""     # Transient on-frame confirmation banner
+        self._flash_frames = 0
 
         # Step tracking and position logging
         self._step_count = 0
+        self._episode_num = 0  # Incremented on each reset(); shown on the frame
         self._print_coords = True  # Set to False to disable position logging
 
         # --- Reward tracking state (reset each episode in reset()) ---
@@ -859,6 +967,7 @@ class HorseRaceEnv(gym.Env):
         preprocessed observation.
         """
         obs = self._env.reset()
+        self._episode_num += 1
 
         # Execute the horse-mounting startup sequence
         obs_after_mount = self._mount_horse()
@@ -915,7 +1024,7 @@ class HorseRaceEnv(gym.Env):
 
         # Increment step counter and log position
         self._step_count += 1
-        self._log_position(obs, step=self._step_count)
+        # self._log_position(obs, step=self._step_count)
 
         if self._visualize:
             self.render()
@@ -955,7 +1064,7 @@ class HorseRaceEnv(gym.Env):
                 obs, _, done, info = result
 
             self._step_count += 1
-            self._log_position(obs, step=self._step_count)
+            # self._log_position(obs, step=self._step_count)
 
             try:
                 self._last_raw_obs = obs
@@ -980,6 +1089,158 @@ class HorseRaceEnv(gym.Env):
 
         return processed, total_reward, done, info
 
+
+    @staticmethod
+    def _fit_to_screen(frame: np.ndarray, screen_w: int, screen_h: int) -> np.ndarray:
+        """
+        Scale *frame* to fill a *screen_w* × *screen_h* canvas while preserving
+        its aspect ratio, then center it (letterboxing the leftover margin with
+        black).  Returns a screen-sized BGR image ready for a fullscreen window.
+        """
+        h, w = frame.shape[:2]
+        scale = min(screen_w / w, screen_h / h)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        # Nearest-neighbour keeps the upscaled game pixels crisp; AREA is better
+        # on the rare downscale.
+        interp = cv2.INTER_NEAREST if scale >= 1 else cv2.INTER_AREA
+        resized = cv2.resize(frame, (new_w, new_h), interpolation=interp)
+
+        canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
+        x0 = (screen_w - new_w) // 2
+        y0 = (screen_h - new_h) // 2
+        canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+        return canvas
+
+    # -- Interactive controls (hotkeys + on-frame buttons) ----------------
+
+    # Hotkey -> command mapping. Extra keys beyond the requested R/S are handy
+    # for live debugging; all are also discoverable from the on-frame hint line.
+    _KEY_COMMANDS = {
+        ord("r"): "reset", ord("R"): "reset",     # end the episode now -> auto-reset
+        ord("s"): "save",  ord("S"): "save",       # checkpoint the model
+        ord("p"): "pause", ord("P"): "pause",      # freeze/unfreeze the loop
+        ord("h"): "HUD",  ord("H"): "HUD",        # toggle the text overlay
+        ord("c"): "shot",  ord("C"): "shot",        # save a PNG screenshot
+    }
+
+    def _flash(self, msg: str, frames: int = 30) -> None:
+        """Show a transient confirmation banner for the next *frames* renders."""
+        self._flash_msg = msg
+        self._flash_frames = frames
+
+    def _handle_command(self, cmd: str) -> None:
+        """Dispatch a control command from either a hotkey or a button click."""
+        if cmd == "reset":
+            self._force_done = True   # picked up in step(): done = done or _force_done
+            self._paused = False      # don't strand a reset behind a pause
+            self._flash("RESETTING")
+            logger.info(">>> Manual RESET requested.")
+        elif cmd == "save":
+            self._save_model()
+        elif cmd == "pause":
+            self._paused = not self._paused
+            self._flash("PAUSED" if self._paused else "RESUMED")
+            logger.info(">>> %s", "PAUSED" if self._paused else "RESUMED")
+        elif cmd == "HUD":
+            self._show_annotations = not self._show_annotations
+        elif cmd == "shot":
+            self._screenshot()
+
+    def _handle_key(self, key: int) -> None:
+        """Translate a waitKey code into a command (no-op when no key pressed)."""
+        if key in (-1, 255):
+            return
+        cmd = self._KEY_COMMANDS.get(key)
+        if cmd is not None:
+            self._handle_command(cmd)
+
+    def _save_model(self) -> None:
+        """Save the current PPO model to disk (manual checkpoint)."""
+        model = self._model if self._model is not None else _ACTIVE_MODEL
+        if model is None:
+            logger.warning(
+                "Save requested but no model reference is set "
+                "(self._model=%s, _ACTIVE_MODEL=%s).",
+                self._model, _ACTIVE_MODEL,
+            )
+            self._flash("NO MODEL")
+            return
+        try:
+            path = new_checkpoint_path()
+            model.save(path)
+            logger.info(">>> Model saved to %s.zip (manual).", path)
+            self._flash("MODEL SAVED")
+        except Exception as e:  # pragma: no cover - disk/serialization issues
+            logger.warning("Manual save failed: %s", e)
+            self._flash("SAVE FAILED")
+
+    def _screenshot(self) -> None:
+        """Write the current native POV frame to a timestamped PNG."""
+        raw = self._last_raw_obs
+        if raw is None or "pov" not in raw:
+            return
+        fname = f"screenshot_ep{self._episode_num}_step{self._step_count}.png"
+        try:
+            bgr = cv2.cvtColor(np.array(raw["pov"], dtype=np.uint8), cv2.COLOR_RGB2BGR)
+            cv2.imwrite(fname, bgr)
+            logger.info(">>> Saved screenshot %s", fname)
+            self._flash("SCREENSHOT")
+        except Exception as e:  # pragma: no cover
+            logger.warning("Screenshot failed: %s", e)
+
+    def _build_buttons(self, w: int, h: int) -> None:
+        """Compute button rectangles (top-right stack) in canvas coordinates."""
+        bw, bh, margin, gap = 240, 64, 28, 18
+        x1 = w - margin - bw
+        specs = [("reset", "Reset  (R)"), ("save", "Save  (S)")]
+        self._buttons = [
+            (cmd, label, x1, margin + i * (bh + gap),
+             x1 + bw, margin + i * (bh + gap) + bh)
+            for i, (cmd, label) in enumerate(specs)
+        ]
+
+    def _on_mouse(self, event, x, y, flags, param) -> None:
+        """Mouse callback: trigger a button's command on left-click inside it.
+
+        OpenCV reports (x, y) in image (canvas) coordinates regardless of window
+        scaling, so we hit-test against the canvas-space button rectangles.
+        """
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        for cmd, _label, x1, y1, x2, y2 in self._buttons:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                self._handle_command(cmd)
+                break
+
+    def _draw_overlay(self, canvas: np.ndarray) -> None:
+        """Draw the buttons, hotkey hint, and any active flash onto *canvas*."""
+        # Buttons
+        for _cmd, label, x1, y1, x2, y2 in self._buttons:
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (50, 50, 50), -1)
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (220, 220, 220), 2)
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            tx = x1 + (x2 - x1 - tw) // 2
+            ty = y1 + (y2 - y1 + th) // 2
+            cv2.putText(canvas, label, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (255, 255, 255), 2, cv2.LINE_AA)
+
+        # Hotkey hint (bottom-left)
+        hint = "  R reset   S save   P pause   H info   C screenshot"
+        cv2.putText(canvas, hint, (24, canvas.shape[0] - 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
+
+        # Persistent PAUSED marker
+        if self._paused:
+            self._flash_msg, self._flash_frames = "PAUSED", max(self._flash_frames, 1)
+
+        # Transient flash banner (top-center)
+        if self._flash_frames > 0 and self._flash_msg:
+            self._flash_frames -= 1
+            (tw, th), _ = cv2.getTextSize(self._flash_msg, cv2.FONT_HERSHEY_DUPLEX, 1.4, 3)
+            tx = (canvas.shape[1] - tw) // 2
+            cv2.putText(canvas, self._flash_msg, (tx, 110),
+                        cv2.FONT_HERSHEY_DUPLEX, 1.4, (0, 255, 255), 3, cv2.LINE_AA)
 
     def render(self, mode: str = "human", return_frame: bool = False):
         """Render or return a visual frame using OpenCV.
@@ -1012,10 +1273,26 @@ class HorseRaceEnv(gym.Env):
         except Exception:
             pass
 
-        # Annotations (optional)
+        # Annotations (optional). Drawn on the native frame so they appear in
+        # both the recorded video and the upscaled on-screen view.
         if self._show_annotations and _CV2_AVAILABLE:
-            text = "HorseRaceEnv"
-            cv2.putText(bgr, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+            white = (255, 255, 255)
+            baseline_y = 22
+            x = 8
+            # Drawn left-to-right as separate segments so the episode info can
+            # use a smaller serif font, with a tight gap around the "|".
+            # (text, font, scale, thickness, gap_after_px)
+            segments = [
+                ("HoraceCam", cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1, 4),
+                ("|", cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1, 4),
+                (f"Ep {self._episode_num} Step {self._step_count}",
+                 cv2.FONT_HERSHEY_PLAIN, 0.7, 1, 0),
+            ]
+            for text, font, scale, thick, gap in segments:
+                cv2.putText(bgr, text, (x, baseline_y), font, scale, white,
+                            thick, cv2.LINE_AA)
+                (tw, _th), _ = cv2.getTextSize(text, font, scale, thick)
+                x += tw + gap
 
         # Initialize video writer lazily if requested
         if self._video_path is not None and self._video_writer is None and _CV2_AVAILABLE:
@@ -1029,8 +1306,43 @@ class HorseRaceEnv(gym.Env):
 
         if self._visualize and _CV2_AVAILABLE:
             try:
-                cv2.imshow("HorseRace", bgr)
-                cv2.waitKey(1)
+                # Scale-to-fill and center the frame so it occupies the whole
+                # noVNC page instead of sitting small in the top-left corner.
+                display = self._fit_to_screen(bgr, VNC_SCREEN_W, VNC_SCREEN_H)
+                if not self._render_window_ready:
+                    cv2.namedWindow(RENDER_WINDOW_NAME, cv2.WINDOW_NORMAL)
+                    # Best-effort fullscreen (honored only if a WM is running);
+                    # the screen-sized canvas + resize/move below fill the page
+                    # even without a window manager.
+                    try:
+                        cv2.setWindowProperty(
+                            RENDER_WINDOW_NAME,
+                            cv2.WND_PROP_FULLSCREEN,
+                            cv2.WINDOW_FULLSCREEN,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        cv2.resizeWindow(RENDER_WINDOW_NAME, VNC_SCREEN_W, VNC_SCREEN_H)
+                        cv2.moveWindow(RENDER_WINDOW_NAME, 0, 0)
+                    except Exception:
+                        pass
+                    self._build_buttons(VNC_SCREEN_W, VNC_SCREEN_H)
+                    cv2.setMouseCallback(RENDER_WINDOW_NAME, self._on_mouse)
+                    self._render_window_ready = True
+
+                self._draw_overlay(display)
+                cv2.imshow(RENDER_WINDOW_NAME, display)
+                self._handle_key(cv2.waitKey(1) & 0xFF)
+
+                # Pause loop: keep the window responsive (so buttons/keys still
+                # work) while the training step is frozen here. A command that
+                # clears _paused (Reset or another Pause press) breaks us out.
+                while self._paused:
+                    paused_canvas = display.copy()
+                    self._draw_overlay(paused_canvas)
+                    cv2.imshow(RENDER_WINDOW_NAME, paused_canvas)
+                    self._handle_key(cv2.waitKey(50) & 0xFF)
             except Exception:
                 # In headless contexts this may fail; ignore to keep training running
                 pass
@@ -1218,6 +1530,26 @@ def make_env():
     return _init
 
 
+def attach_model_to_envs(vec_env, model) -> None:
+    """Give every underlying HorseRaceEnv a handle to *model*.
+
+    Called in train() *before* learn() so the on-frame Save button / 'S' hotkey
+    works from the very first rendered frame. SB3 resets the env (running the
+    mount sequence, which renders) inside _setup_learn() — i.e. before the
+    callback's on_training_start fires — so relying on the callback alone leaves
+    a window where _model is still None.
+    """
+    set_active_model(model)   # process-wide fallback, independent of instances
+    venv = vec_env
+    while hasattr(venv, "venv"):
+        venv = venv.venv
+    for env in getattr(venv, "envs", []):
+        try:
+            env._model = model
+        except Exception as e:  # pragma: no cover
+            logger.warning("Could not attach model to env: %s", e)
+
+
 # ===========================================================================
 #  4. Reward Tracking Callback
 # ===========================================================================
@@ -1247,6 +1579,14 @@ class RewardTrackingCallback(BaseCallback):
         """Initialise per-environment reward accumulators."""
         n_envs = self.training_env.num_envs
         self._current_rewards = [0.0] * n_envs
+        # Give each env a handle to the model so the on-frame "Save" button /
+        # 'S' hotkey can checkpoint it directly (plus a process-wide fallback).
+        set_active_model(self.model)
+        for i in range(n_envs):
+            try:
+                self._get_inner_env(i)._model = self.model
+            except Exception as e:
+                logger.warning("Could not attach model to env %d: %s", i, e)
 
     def _get_inner_env(self, vec_env_idx: int):
         """Navigate through SB3 VecEnv wrappers to reach HorseRaceEnv."""
@@ -1311,6 +1651,23 @@ class RewardTrackingCallback(BaseCallback):
                         f"Reward: {self.episode_rewards[-1]:.2f}  "
                         f"Duration: {dur_str}  "
                         f"Completion: {rate:.0%}"
+                    )
+
+                # --- TensorBoard custom scalars (per completed episode) ---
+                # The env isn't Monitor-wrapped, so SB3 won't emit ep_rew_mean
+                # on its own. Record our own episode metrics here; the SB3 logger
+                # flushes them to TensorBoard on its next dump (once per rollout).
+                self.logger.record("rollout/ep_reward", self.episode_rewards[-1])
+                self.logger.record(
+                    "custom/completion_rate", self.completion_rates[-1]
+                )
+                self.logger.record(
+                    "custom/checkpoints_reached",
+                    self.completion_rates[-1] * NUM_CHECKPOINTS,
+                )
+                if self.episode_durations[-1] is not None:
+                    self.logger.record(
+                        "custom/lap_time_s", self.episode_durations[-1]
                     )
 
         return True  # Continue training
@@ -1637,12 +1994,15 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
 
     logger.info("Initialising PPO with CnnPolicy...")
 
-    # load horse_race_ppo.zip if it exists
-    if os.path.exists("horse_race_ppo.zip"):
-        model = PPO.load("horse_race_ppo.zip", env=env)
-        logger.info("Loaded pre-trained model from horse_race_ppo.zip")
+    # Load the agent in ./agent if present, else train a fresh model.
+    saved = resolve_load_path()
+    if saved is not None:
+        model = PPO.load(saved, env=env, tensorboard_log=TENSORBOARD_LOG_DIR)
+        logger.info("Loaded agent from '%s/': %s", LOAD_AGENT_DIR, saved)
     else:
-        logger.info("No pre-trained model found, training from scratch")
+        logger.info(
+            "No agent in '%s/', training from scratch.", LOAD_AGENT_DIR,
+        )
         model = PPO(
             policy="CnnPolicy",
             env=env,
@@ -1654,12 +2014,18 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
             gae_lambda=GAE_LAMBDA,
             clip_range=CLIP_RANGE,
             verbose=1,
+            tensorboard_log=TENSORBOARD_LOG_DIR,
             # Uncomment and modify the line below to use a custom visual encoder:
             # policy_kwargs=dict(
             #     features_extractor_class=MyCustomEncoder,
             #     features_extractor_kwargs=dict(features_dim=512),
             # ),
         )
+
+    # Attach the model to the env now (before learn()) so the in-frame Save
+    # works from the first frame — SB3's first env.reset() (and our render loop)
+    # runs inside learn() before the callback's on_training_start.
+    attach_model_to_envs(env, model)
 
     # Set up reward tracking
     reward_callback = RewardTrackingCallback(verbose=1)
@@ -1670,14 +2036,19 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     # model.learn() starts stepping.
 
     logger.info(f"Starting training for {total_timesteps:,} timesteps...")
+    # Timestamped run name so each launch lands in its own TensorBoard subdir
+    # (tb_logs/horserace_<stamp>_1) instead of overwriting prior runs.
+    run_name = f"horserace_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     model.learn(
         total_timesteps=total_timesteps,
         callback=reward_callback,
+        tb_log_name=run_name,
     )
 
-    # Save the trained model
-    model.save(MODEL_SAVE_PATH)
-    logger.info(f"Model saved to {MODEL_SAVE_PATH}")
+    # Save the trained model as a timestamped checkpoint in saved_agent/
+    final_path = new_checkpoint_path()
+    model.save(final_path)
+    logger.info(f"Model saved to {final_path}.zip")
 
     # Plot the training reward curve
     plot_rewards(reward_callback.episode_rewards)

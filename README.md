@@ -39,3 +39,12 @@ To run the agent, you'll need to supply your own Minecraft 1.16.5 world and to e
 # Start the agent
 python agent.py
 ```
+
+## Load Checkpoint
+To load a pre-trained agent, find the desired saved_agent zip in saved_agents/ and run:
+
+```bash
+bash load_agent.sh saved_agents/saved_agent_20260602_005514.zip
+```
+
+The agent now exists at agent/ and will be loaded at the start of training.
