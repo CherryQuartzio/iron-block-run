@@ -162,7 +162,12 @@ PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
 STUCK_MIN_DISPLACEMENT = 1.0    # Minimum blocks moved in STUCK_WINDOW steps
-OFF_COURSE_MAX_DIST = 30.0      # Max distance from nearest track segment
+OFF_COURSE_MAX_DIST = 30.0      # (legacy) Max distance from nearest checkpoint midpoint
+OFF_COURSE_MARGIN = 6.0         # Terminal off-course = perp dist > local half-width + this
+
+# -- Arc-length progress --
+MAX_PROGRESS_PER_STEP = 20.0    # Arc-length blocks/step above this = glitch, ignore
+WRONG_DIR_MIN_STEP = 0.5        # Backward arc-length/step that trips wrong-direction
 
 # -- Horse height offset --
 # Player riding a horse has ypos ~1.6-2.0 blocks above the ground block.
@@ -189,6 +194,115 @@ CHECKPOINTS = [
 ]
 # fmt: on
 NUM_CHECKPOINTS = len(CHECKPOINTS)  # 6 (including start/goal)
+
+# -- Track centerline --
+# Ordered waypoints tracing the racetrack centerline as a CLOSED LOOP.
+# Entry types:
+#   "Name"       -> a checkpoint anchor; resolved to that gate's midpoint, so
+#                   CHECKPOINTS stays the single source of truth (no duplicated
+#                   coordinates).  Plain points between anchors trace the curve.
+#   (x, z)       -> a plain interpolated waypoint.
+#   (x, z, hw)   -> a waypoint with a local corridor half-width override.
+# The loop closes implicitly from the last entry back to the first.
+# fmt: off
+TRACK_WAYPOINTS = [
+    "Start",
+    (-74, -176), (-74, -205),
+    "CP_A",
+    (-72, -228), (-59, -263), (-42, -284), (-27, -298),
+    "CP_B",
+    (-23, -309), (-11, -315), (-4, -325), (-15, -357), (-26, -377),
+    "CP_C",
+    (-52, -383, 1.0),  # narrow bridge just past CP_C (half-width override)
+    (-78, -381), (-96, -373),
+    "CP_D",
+    (-111, -356), (-117, -335), (-116, -288),
+    "CP_E",
+    (-116, -257), (-135, -216), (-157, -190), (-164, -171), (-160, -157),
+    (-153, -137), (-133, -130), (-94, -129), (-79, -135), (-74, -150),
+]
+# fmt: on
+
+
+def _checkpoint_midpoint(cp) -> tuple:
+    """(x, z) midpoint of a checkpoint gate line."""
+    return ((cp["p1"][0] + cp["p2"][0]) / 2.0,
+            (cp["p1"][1] + cp["p2"][1]) / 2.0)
+
+
+def _checkpoint_half_width(cp) -> float:
+    """Half the gate span = default corridor half-width at that checkpoint."""
+    dx = cp["p1"][0] - cp["p2"][0]
+    dz = cp["p1"][1] - cp["p2"][1]
+    return np.hypot(dx, dz) / 2.0
+
+
+def build_centerline(waypoints):
+    """
+    Resolve TRACK_WAYPOINTS into a closed-loop centerline polyline.
+
+    Returns a dict with numpy arrays (one row per vertex, last == first so the
+    loop is closed):
+        verts        (M+1, 2)  ordered (x, z) vertices
+        s            (M+1,)     cumulative arc-length from Start
+        half_width   (M+1,)     corridor half-width, interpolated along s
+        total_length float      full loop length
+        checkpoint_s dict       {name: arc-length s of that gate}
+    Half-widths are anchored at checkpoint gates (from gate span) and at any
+    (x, z, hw) override, then linearly interpolated along arc-length between
+    anchors.
+    """
+    gate_mid = {cp["name"]: _checkpoint_midpoint(cp) for cp in CHECKPOINTS}
+    gate_hw = {cp["name"]: _checkpoint_half_width(cp) for cp in CHECKPOINTS}
+
+    verts, hw, checkpoint_idx = [], [], {}
+    for wp in waypoints:
+        if isinstance(wp, str):
+            if wp not in gate_mid:
+                raise ValueError(f"TRACK_WAYPOINTS references unknown gate {wp!r}")
+            checkpoint_idx[wp] = len(verts)
+            verts.append(gate_mid[wp])
+            hw.append(gate_hw[wp])
+        elif len(wp) == 3:
+            verts.append((wp[0], wp[1]))
+            hw.append(float(wp[2]))
+        else:
+            verts.append((wp[0], wp[1]))
+            hw.append(None)
+
+    # Close the loop back to the first vertex.
+    verts.append(verts[0])
+    hw.append(hw[0])
+
+    verts = np.asarray(verts, dtype=np.float64)
+    seg = np.diff(verts, axis=0)
+    seg_len = np.hypot(seg[:, 0], seg[:, 1])
+    s = np.concatenate([[0.0], np.cumsum(seg_len)])
+
+    # Interpolate missing half-widths along arc-length between known anchors.
+    known_s = np.array([s[i] for i, w in enumerate(hw) if w is not None])
+    known_w = np.array([w for w in hw if w is not None])
+    half_width = np.interp(s, known_s, known_w)
+
+    checkpoint_s = {name: float(s[i]) for name, i in checkpoint_idx.items()}
+
+    cl = {
+        "verts": verts,
+        "s": s,
+        "half_width": half_width,
+        "total_length": float(s[-1]),
+        "checkpoint_s": checkpoint_s,
+    }
+
+    # Sanity: every gate midpoint must lie on the centerline (it is a vertex,
+    # so distance is ~0) and gate order along s must match CHECKPOINTS order.
+    order = [n for n in (cp["name"] for cp in CHECKPOINTS) if n in checkpoint_s]
+    assert order == sorted(order, key=lambda n: checkpoint_s[n]), (
+        "checkpoint arc-length order disagrees with CHECKPOINTS order")
+    return cl
+
+
+CENTERLINE = build_centerline(TRACK_WAYPOINTS)
 
 # -- Block type vocabulary for grid observation --
 BLOCK_TO_ID = {
@@ -716,6 +830,7 @@ class HorseRaceEnv(gym.Env):
         """Initialise / reset all per-episode reward tracking variables."""
         self._next_checkpoint_idx = 1     # 0=Start already behind us; aim for CP_A
         self._last_pos = None             # (x, y, z) from previous step
+        self._last_s = None               # arc-length s of _last_pos on centerline
         self._position_history = collections.deque(maxlen=STUCK_WINDOW)
         self._last_ground_block = "air"
         self._force_done = False          # Set True to end episode early
@@ -809,6 +924,42 @@ class HorseRaceEnv(gym.Env):
         return min(
             HorseRaceEnv._dist_to_checkpoint(pos, cp) for cp in CHECKPOINTS
         )
+
+    @staticmethod
+    def _project_to_centerline(pos, centerline=CENTERLINE):
+        """
+        Project an (x, ?, z) position onto the centerline polyline.
+
+        Returns (perp_dist, s_proj, half_width):
+          perp_dist  : perpendicular XZ distance to the nearest track segment
+          s_proj     : arc-length along the loop at the closest point
+          half_width : local corridor half-width at that point
+        Exact point-to-segment over all ~33 segments (cheap, called per step).
+        """
+        px, pz = pos[0], pos[2]
+        verts = centerline["verts"]
+        s_arr = centerline["s"]
+        hw_arr = centerline["half_width"]
+        best_d2 = np.inf
+        best_s = 0.0
+        best_hw = 0.0
+        for i in range(len(verts) - 1):
+            ax, az = verts[i]
+            bx, bz = verts[i + 1]
+            dx, dz = bx - ax, bz - az
+            seg_len2 = dx * dx + dz * dz
+            if seg_len2 < 1e-9:
+                t = 0.0
+            else:
+                t = ((px - ax) * dx + (pz - az) * dz) / seg_len2
+                t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+            cx, cz = ax + t * dx, az + t * dz
+            d2 = (px - cx) ** 2 + (pz - cz) ** 2
+            if d2 < best_d2:
+                best_d2 = d2
+                best_s = s_arr[i] + t * (s_arr[i + 1] - s_arr[i])
+                best_hw = hw_arr[i] + t * (hw_arr[i + 1] - hw_arr[i])
+        return float(np.sqrt(best_d2)), float(best_s), float(best_hw)
 
     # -- Action helpers --------------------------------------------------
 
@@ -992,6 +1143,7 @@ class HorseRaceEnv(gym.Env):
         pos = self._extract_position(obs)
         if pos is not None:
             self._last_pos = pos
+            _, self._last_s, _ = self._project_to_centerline(pos)
             self._position_history.append(pos)
 
         # (The HUD is hidden natively via GameSettings.hideGUI in EnvServer.java.)
@@ -1362,7 +1514,7 @@ class HorseRaceEnv(gym.Env):
 
         Signals (all values from tunable constants at top of file):
           - Checkpoint crossing          (+REWARD_CHECKPOINT / +REWARD_LAP_COMPLETE)
-          - Progress toward next CP      (+REWARD_PROGRESS * delta_distance)
+          - Progress along centerline    (+REWARD_PROGRESS * delta_arclength)
           - On grass_path / dirt_path     (+REWARD_ON_PATH per step)
           - On gold_block (speed boost)   (+REWARD_GOLD_BLOCK)
           - On spruce_slab (bridge)       (+REWARD_SPRUCE_SLAB)
@@ -1389,6 +1541,13 @@ class HorseRaceEnv(gym.Env):
         pos = self._extract_position(raw_obs)
         ground_block = self._extract_ground_block(raw_obs)
         self._last_ground_block = ground_block
+
+        # Project onto the centerline once; reused by progress (2) and the
+        # far-off-course cull (6).
+        if pos is not None:
+            perp_dist, s_curr, half_width = self._project_to_centerline(pos)
+        else:
+            perp_dist = s_curr = half_width = None
 
         # ---- 1. Checkpoint crossing ------------------------------------
         if pos is not None and self._last_pos is not None:
@@ -1424,27 +1583,27 @@ class HorseRaceEnv(gym.Env):
                     (self._next_checkpoint_idx + 1) % NUM_CHECKPOINTS
                 )
 
-        # ---- 2. Progress toward next checkpoint -----------------------
-        if pos is not None and self._last_pos is not None:
-            target_cp = CHECKPOINTS[self._next_checkpoint_idx]
-            prev_dist = self._dist_to_checkpoint(self._last_pos, target_cp)
-            curr_dist = self._dist_to_checkpoint(pos, target_cp)
-            delta = prev_dist - curr_dist  # positive = getting closer
-            reward += REWARD_PROGRESS * delta
-
-        # ---- 2b. Wrong-direction penalty (going backward) --------------
-        #  Detect if the agent is heading backward by checking whether it
-        #  is getting closer to the *previous* checkpoint rather than the
-        #  next one.  This catches the agent trying to short-cut by
-        #  running the loop in reverse.
-        if pos is not None and self._last_pos is not None:
-            prev_cp_idx = (self._next_checkpoint_idx - 1) % NUM_CHECKPOINTS
-            prev_cp = CHECKPOINTS[prev_cp_idx]
-            prev_dist_back = self._dist_to_checkpoint(self._last_pos, prev_cp)
-            curr_dist_back = self._dist_to_checkpoint(pos, prev_cp)
-            if curr_dist_back < prev_dist_back - 0.5:
-                # Agent is moving toward the checkpoint it already passed
-                reward += PENALTY_WRONG_DIRECTION
+        # ---- 2. Progress along the centerline (arc-length) ------------
+        #  Reward forward movement as the gain in arc-length s along the loop
+        #  (both positions projected onto the centerline).  Smooth around
+        #  corners and the whole lap, unlike distance to a single midpoint.
+        #  Backward movement erodes reward symmetrically and, past a small
+        #  threshold, trips the wrong-direction penalty (catches reverse
+        #  short-cutting around the loop).
+        if s_curr is not None and self._last_s is not None:
+            delta_s = s_curr - self._last_s
+            # Unwrap across the start/goal seam (s wraps total_length -> 0).
+            L = CENTERLINE["total_length"]
+            if delta_s > L / 2.0:
+                delta_s -= L
+            elif delta_s < -L / 2.0:
+                delta_s += L
+            # Guard projection ambiguity / teleports: a horse only moves a few
+            # blocks per step, so an implausible jump is not real progress.
+            if abs(delta_s) <= MAX_PROGRESS_PER_STEP:
+                reward += REWARD_PROGRESS * delta_s
+                if delta_s < -WRONG_DIR_MIN_STEP:
+                    reward += PENALTY_WRONG_DIRECTION
 
         # ---- 3. Block-type rewards / penalties -------------------------
         if ground_block in ("grass_path", "dirt_path"):
@@ -1482,19 +1641,23 @@ class HorseRaceEnv(gym.Env):
                     )
 
         # ---- 6. Far off-course detection --------------------------------
-        if pos is not None:
-            min_dist = self._min_dist_to_any_checkpoint(pos)
-            if min_dist > OFF_COURSE_MAX_DIST:
+        # Perpendicular distance to the track centerline, against a LOCAL
+        # tolerance (corridor half-width + margin) -- so the agent is only
+        # culled when it genuinely leaves the track, not when it is mid-segment
+        # far from the sparse checkpoint midpoints.
+        if perp_dist is not None:
+            if perp_dist > half_width + OFF_COURSE_MARGIN:
                 reward += PENALTY_FAR_OFF_COURSE
                 self._force_done = True
                 logger.info(
-                    f">>> FAR OFF COURSE (nearest CP: {min_dist:.1f} blocks). "
-                    f"Ending episode."
+                    f">>> FAR OFF COURSE (perp {perp_dist:.1f} > "
+                    f"{half_width:.1f}+{OFF_COURSE_MARGIN:.0f}). Ending episode."
                 )
 
         # ---- Update state for next step --------------------------------
         if pos is not None:
             self._last_pos = pos
+            self._last_s = s_curr
 
         return reward
 
