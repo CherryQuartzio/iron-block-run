@@ -155,6 +155,7 @@ PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -5.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -5.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
+PENALTY_AIR_TIME = -0.05        # Per-step: in the air. Small to avoid excess jumping.
 
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
@@ -311,7 +312,7 @@ TrackProj = collections.namedtuple(
 
 # -- Block type vocabulary for grid observation --
 BLOCK_TO_ID = {
-    "air": 0,
+    "air": 0, "cave_air": 0,
     "grass_path": 1, "dirt_path": 1,  # dirt_path is 1.17+ name for grass_path
     "grass_block": 2,
     "soul_sand": 3,
@@ -342,7 +343,8 @@ GRID_CLASS = {
 }
 GRID_CLASS_UNKNOWN = 6
 NUM_GRID_CLASSES = 7
-GRID_CELLS = 125                # floor_grid is 5x5x5 (x,z in [-2,2], y in [-4,0])
+GRID_CELLS = 27                # floor_grid is 5x5x5 (x,z in [-2,2], y in [-4,0])
+CENTER_BLOCK = GRID_CELLS // 2
 NUM_SCALARS = 13               # see HorseRaceEnv._build_observation
 OBS_DIM = NUM_SCALARS + GRID_CELLS * NUM_GRID_CLASSES  # 888
 
@@ -527,34 +529,38 @@ except FileNotFoundError as e:
 #  1a. Custom Block Grid Observation Handler
 # ===========================================================================
 
-class BlockGridHandler(Handler):
+class BlockGridHandler(TranslationHandler):
     """
-    Injects an <ObservationFromGrid> element into the Malmo mission XML.
+    Observable wrapper for Malmo <ObservationFromGrid>.
 
-    This makes the Minecraft server report block types in a grid around the
-    agent each tick.  The data appears in the raw Malmo JSON observation
-    under the key given by *grid_name*.  Because this is a plain Handler
-    (not a TranslationHandler), the data does NOT automatically appear in
-    the gym observation dict -- we extract it manually in the wrapper.
-
-    The grid is offset downward (negative y) to reach ground level when the
-    player is riding a horse (~2 blocks above the ground block).
+    - Provides a gym `space` so herobraine can include it in the observation space.
+    - Implements `from_hero` to translate the hero/Malmo value into a numeric
+      array (length GRID_CELLS) mapping block names -> integer ids (BLOCK_TO_ID).
+    - Exposes the observable under the name `floor_grid` (via to_string()) so
+      the raw observation dict contains the key 'floor_grid'.
     """
 
     def __init__(
         self,
         grid_name: str = "floor_grid",
-        min_x: int = -2, max_x: int = 2,
-        min_y: int = -4, max_y: int = 0,
-        min_z: int = -2, max_z: int = 2,
+        min_x: int = -1, max_x: int = 1,
+        min_y: int = -2, max_y: int = 0,
+        min_z: int = -1, max_z: int = 1,
     ):
+        # Numeric Box space describing the translated observation returned to Python.
+        # Use int32 vector length GRID_CELLS. The numeric space is descriptive only.
+        space = gym.spaces.Box(low=0, high=255, shape=(GRID_CELLS,), dtype=np.int32)
+        super().__init__(space)
+
         self.grid_name = grid_name
         self.min_x, self.max_x = min_x, max_x
         self.min_y, self.max_y = min_y, max_y
         self.min_z, self.max_z = min_z, max_z
 
     def to_string(self) -> str:
-        return f"block_grid_{self.grid_name}"
+        # The key under which this observable will appear in the raw obs dict.
+        # Use the simple name so downstream code (raw_obs.get("floor_grid")) works.
+        return self.grid_name
 
     def xml_template(self) -> str:
         return (
@@ -566,6 +572,31 @@ class BlockGridHandler(Handler):
             f'</ObservationFromGrid>'
         )
 
+    def from_hero(self, hero_obs):
+        """
+        Extract floor_grid from custom (info JSON from Java EnvServer.getInfo()).
+        """
+        try:
+            grid_list = hero_obs[self.grid_name]
+            # Validate
+            if not grid_list or not isinstance(grid_list, (list, tuple)) or len(grid_list) < GRID_CELLS:
+                logger.warning(f"[BlockGridHandler.from_hero] No valid grid_list, returning unknowns")
+                return ['unknown' for _ in range(27)]
+
+            arr = ['' for _ in range(27)]
+            for i, v in enumerate(grid_list):
+                if v is None:
+                    arr[i] = "unknown"
+                else:
+                    name = str(v).strip()
+                    if ":" in name:
+                        name = name.split(":")[-1][:-1]
+                    arr[i] = name
+            return arr
+
+        except Exception as e:
+            logger.error(f"[BlockGridHandler.from_hero] Exception: {e}", exc_info=True)
+            return ['unknown' for _ in range(27)]
 
 class HorseSpawnDecorator(Handler):
     """
@@ -689,6 +720,12 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
         return [
             handlers.POVObservation(self.resolution),
             handlers.ObservationFromCurrentLocation(),  # Adds agent position, yaw, pitch
+            BlockGridHandler(
+                grid_name="floor_grid",
+                min_x=-1, max_x=1,
+                min_y=-2, max_y=0,   # Covers ground level through horse body
+                min_z=-1, max_z=1,
+            ),
         ]
 
     def create_actionables(self) -> List[TranslationHandler]:
@@ -716,12 +753,12 @@ class HorseRaceEnvSpec(HumanControlEnvSpec):
     def create_agent_handlers(self) -> List[Handler]:
         """Include block grid observation for reward computation."""
         return [
-            BlockGridHandler(
-                grid_name="floor_grid",
-                min_x=-2, max_x=2,
-                min_y=-4, max_y=0,   # Covers ground level through horse body
-                min_z=-2, max_z=2,
-            ),
+            # BlockGridHandler(
+            #     grid_name="floor_grid",
+            #     min_x=-2, max_x=2,
+            #     min_y=-4, max_y=0,   # Covers ground level through horse body
+            #     min_z=-2, max_z=2,
+            # ),
         ]
 
     def create_monitors(self) -> List[TranslationHandler]:
@@ -972,25 +1009,14 @@ class HorseRaceEnv(gym.Env):
 
     @staticmethod
     def _extract_ground_block(obs: dict) -> str:
-        """
-        Return the block name directly below the horse from the grid
-        observation.  Falls back to 'unknown' if unavailable.
-
-        The grid is x=[-2..2], y=[-4..0], z=[-2..2] (sx=5, sy=5, sz=5).
-        Malmo orders grid data as: for y ascending, then z ascending,
-        then x ascending.  Flat index formula:
-            idx = (y - min_y) * sz * sx + (z - min_z) * sx + (x - min_x)
-
-        For the center ground block at (x=0, z=0, y=-HORSE_Y_OFFSET):
-            y_off = -HORSE_Y_OFFSET - (-4) = 4 - HORSE_Y_OFFSET
-            idx = y_off * 25 + 2 * 5 + 2
-        """
         try:
-            grid = obs["floor_grid"]
-            y_off = 4 - HORSE_Y_OFFSET  # y=-HORSE_Y_OFFSET relative to min_y=-4
-            idx = y_off * 25 + 2 * 5 + 2  # center x and z
-            return str(grid[idx])
-        except KeyError:
+            grid = obs.get("floor_grid")
+            if grid is None or len(grid) < GRID_CELLS:
+                logger.error("[_extract_ground_block]: grid is None or grid does not match GRID CELLS.")
+                return "unknown"
+            return grid[CENTER_BLOCK]
+        except Exception as e:
+            logger.error(e)
             return "unknown"
 
     @staticmethod
@@ -1647,9 +1673,9 @@ class HorseRaceEnv(gym.Env):
         pos = self._extract_position(raw_obs)
         ground_block = self._extract_ground_block(raw_obs)
         if ground_block == "unknown" and self._step_count % 50 == 0:
-            logger.warning("Ground block not detected. floor_grid is None")
+            logger.warning("Ground block not detected. Unknown or something went wrong.")
         elif self._step_count % 50 == 0:
-            logger.log(f"Ground Block Detected: {ground_block}")
+            logger.info(f"Ground Block Detected: {ground_block}")
         self._last_ground_block = ground_block
 
         # Project onto the centerline once; reused by progress (2) and the
@@ -1717,6 +1743,7 @@ class HorseRaceEnv(gym.Env):
                     reward += PENALTY_WRONG_DIRECTION
 
         # ---- 3. Block-type rewards / penalties -------------------------
+
         if ground_block in ("grass_path", "dirt_path"):
             reward += REWARD_ON_PATH
         elif ground_block == "gold_block":
@@ -1731,6 +1758,8 @@ class HorseRaceEnv(gym.Env):
             reward += PENALTY_COBWEB
         elif ground_block == "grass_block":
             reward += PENALTY_OFF_COURSE
+        elif ground_block == "air":
+            reward += PENALTY_AIR_TIME
 
         # ---- 4. Time penalty -------------------------------------------
         reward += PENALTY_TIME

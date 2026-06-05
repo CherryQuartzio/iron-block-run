@@ -45,6 +45,7 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldSettings;
 import net.minecraft.world.server.ServerWorld;
 import net.minecraft.world.gen.settings.DimensionGeneratorSettings;
+
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -761,6 +762,16 @@ public class EnvServer {
         JsonObject infoJson = new JsonObject();
         List<Object> handlers = missionInit.getMission().getAgentSection().get(0).getAgentHandlers().getAgentMissionHandlers();
         if (mc.player != null) {
+        // Add ground block & whole floor grid under the 'custom' object so MineRL's
+        // Python wrapper will put them into obs['custom'].
+        String groundBlockName = getGroundBlockName(mc);
+        JsonArray floorGrid = buildFloorGrid(mc);
+
+        // Add ground block and whole floor grid as top-level fields so the
+        // MineRL Python wrapper exposes them directly in the raw observation.
+        infoJson.addProperty("floor_block", groundBlockName);
+        infoJson.add("floor_grid", floorGrid);
+
             getAgentHandlers().filter(h -> h instanceof ObservationFromFullInventory).limit(1)
                     .forEach(h -> infoJson.add("inventory", getInventoryJson()));
             getAgentHandlers().filter(h -> h instanceof ObservationFromFullStats).limit(1)
@@ -776,6 +787,61 @@ public class EnvServer {
         infoJson.addProperty("isGuiOpen", mc.currentScreen != null);
         return infoJson.toString();
     }
+    private JsonArray buildFloorGrid(Minecraft mc) {
+        JsonArray grid = new JsonArray();
+        try {
+            if (mc.player == null || mc.world == null) {
+                return grid;
+            }
+            // Grid coordinate ranges (same as agent.py expects)
+            int minX = -1, maxX = 1;
+            int minY = -2, maxY = 0;
+            int minZ = -1, maxZ = 1;
+
+            // Malmo order: y ascending, then z ascending, then x ascending
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    for (int x = minX; x <= maxX; x++) {
+                        // Player-relative coordinates: center is agent position
+                        double px = mc.player.getPosX();
+                        double py = mc.player.getPosY();
+                        double pz = mc.player.getPosZ();
+
+                        BlockPos pos = new BlockPos(Math.floor(px) + x, Math.floor(py) + y, Math.floor(pz) + z);
+                        if (mc.world.isBlockPresent(pos)) {
+                            net.minecraft.block.Block block = mc.world.getBlockState(pos).getBlock();
+                            String blockName = block.toString();
+                            grid.add(blockName != null && !blockName.isEmpty() ? blockName : "unknown");
+                        } else {
+                            grid.add("unknown");
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Error building floor_grid: " + e);
+        }
+        return grid;
+    }
+    private String getGroundBlockName(Minecraft mc) {
+    try {
+        if (mc.player == null || mc.world == null) return "unknown";
+        double px = mc.player.getPosX();
+        double py = mc.player.getPosY();
+        double pz = mc.player.getPosZ();
+        // Two blocks down to account for player on horse (tweak HORSE offset if needed)
+        BlockPos pos = new BlockPos(Math.floor(px), Math.floor(py - 2.0), Math.floor(pz));
+        if (!mc.world.isBlockPresent(pos)) {
+            return "unknown";
+        }
+        net.minecraft.block.Block block = mc.world.getBlockState(pos).getBlock();
+        String blockName = block.toString();
+        return blockName != null && !blockName.isEmpty() ? blockName : "unknown";
+    } catch (Exception e) {
+        LOGGER.warn("Error getting ground block: " + e);
+        return "unknown";
+    }
+}
 
     public static JsonArray getInventoryJson() {
         JsonArray result = new JsonArray();
