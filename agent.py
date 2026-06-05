@@ -99,7 +99,7 @@ HORSE_VARIANT = 1029
 NATIVE_RES = (640, 360)  # MineRL v1.0.2 native POV resolution (width, height)
 
 # -- Render window (noVNC) --
-# Match the Xvfb screen size in gui_entry.sh ("-screen 0 1980x1080x24") so the
+# Match the Xvfb screen size in run_agent.sh ("-screen 0 1980x1080x24") so the
 # visualization fills and centers on the noVNC page. Keep these in sync.
 VNC_SCREEN_W = 1980
 VNC_SCREEN_H = 1080

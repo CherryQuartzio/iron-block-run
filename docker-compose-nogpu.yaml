@@ -1,0 +1,28 @@
+services:
+  minerl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: minerl-dev:latest
+    working_dir: /workspace
+    environment:
+      TMPDIR: /opt/tmp
+      TEMP: /opt/tmp
+      TMP: /opt/tmp
+      JAVA_HOME: /opt/conda
+      DISPLAY: ":99"          # fixed — don't inherit host DISPLAY, Xvfb runs inside
+    volumes:
+      - .:/workspace
+      - minerl-tmp:/opt/tmp
+                              # removed: .Xauthority and X11-unix — not needed with internal Xvfb
+    ports:
+      - "6080:6080"           # noVNC browser access
+    network_mode: host        # kept — but note this makes `ports` a no-op on Linux;
+                              # access via localhost:6080 directly on the host
+    shm_size: "4gb"
+    stdin_open: true
+    tty: true
+    command: tail -f /dev/null
+
+volumes:
+  minerl-tmp:
