@@ -31,7 +31,6 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend for headless rendering
 import matplotlib.pyplot as plt
-from PIL import Image
 import minerl  # noqa: F401 — registers built-in MineRL envs on import
 # Optional OpenCV for visualization. It's safe if not installed; visualization
 # remains disabled by default.
@@ -56,7 +55,7 @@ from minerl.herobraine.hero.handler import Handler
 from minerl.herobraine.hero.handlers.translation import TranslationHandler
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecTransposeImage
+from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 
 # ---------------------------------------------------------------------------
@@ -97,8 +96,6 @@ HORSE_HEALTH = 20.0
 HORSE_VARIANT = 1029
 
 # -- Observation --
-OBS_WIDTH = 144
-OBS_HEIGHT = 144
 NATIVE_RES = (640, 360)  # MineRL v1.0.2 native POV resolution (width, height)
 
 # -- Render window (noVNC) --
@@ -162,7 +159,6 @@ PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
 STUCK_MIN_DISPLACEMENT = 1.0    # Minimum blocks moved in STUCK_WINDOW steps
-OFF_COURSE_MAX_DIST = 30.0      # (legacy) Max distance from nearest checkpoint midpoint
 OFF_COURSE_MARGIN = 6.0         # Terminal off-course = perp dist > local half-width + this
 
 # -- Arc-length progress --
@@ -304,6 +300,15 @@ def build_centerline(waypoints):
 
 CENTERLINE = build_centerline(TRACK_WAYPOINTS)
 
+# Result of projecting a position onto the centerline (see _project_to_centerline).
+#   perp          : unsigned perpendicular distance to the track
+#   signed_offset : same, signed +left / -right of travel direction
+#   s             : arc-length along the loop at the closest point
+#   half_width    : local corridor half-width
+#   tx, tz        : unit tangent (travel direction) of the nearest segment
+TrackProj = collections.namedtuple(
+    "TrackProj", "perp signed_offset s half_width tx tz")
+
 # -- Block type vocabulary for grid observation --
 BLOCK_TO_ID = {
     "air": 0,
@@ -320,6 +325,32 @@ BLOCK_TO_ID = {
     "dirt": 11,
 }
 BLOCK_UNKNOWN_ID = 99
+
+# -- Structured observation (MLP policy) --
+# The policy no longer sees pixels; it consumes a flat float32 vector of
+# track-relative navigation scalars + proprioception + a one-hot of the local
+# block grid.  Each floor_grid cell is mapped to a semantic class below.
+GRID_CLASS = {
+    "air": 0,
+    "grass_path": 1, "dirt_path": 1,                         # the track
+    "grass_block": 2, "dirt": 2,                             # neutral off-track
+    "stone": 2, "cobblestone": 2, "stone_bricks": 2,        # neutral solid
+    "soul_sand": 3, "water": 3, "flowing_water": 3, "cobweb": 3,  # hazards
+    "gold_block": 4, "spruce_slab": 4,                      # boosts / bridge
+    "light_weighted_pressure_plate": 4,
+    "oak_fence": 5,                                          # fence to jump
+}
+GRID_CLASS_UNKNOWN = 6
+NUM_GRID_CLASSES = 7
+GRID_CELLS = 125                # floor_grid is 5x5x5 (x,z in [-2,2], y in [-4,0])
+NUM_SCALARS = 13               # see HorseRaceEnv._build_observation
+OBS_DIM = NUM_SCALARS + GRID_CELLS * NUM_GRID_CLASSES  # 888
+
+# Normalization constants for the scalar features (keep them ~order-1).
+OFFSET_NORM = 10.0             # lateral offset / corridor half-width scale
+CP_DIST_NORM = 100.0           # arc-length distance to next checkpoint scale
+SPEED_NORM = 5.0               # blocks/step velocity scale
+TRACK_LOOKAHEAD = 8.0          # blocks ahead along s for turn anticipation
 
 # -- Charge jump macro --
 CHARGE_JUMP_TICKS = 10  # How many ticks to hold jump for fence clearing
@@ -751,7 +782,7 @@ class HorseRaceEnv(gym.Env):
     """
     Wraps the MineRL HorseRace-v0 environment with:
       - A simplified Discrete(9) action space
-      - A preprocessed 64×64 RGB observation space
+      - A flat structured observation vector (no pixels; see _build_observation)
       - An automatic horse-mounting startup sequence on reset
       - A pluggable reward function (compute_reward)
     """
@@ -765,12 +796,13 @@ class HorseRaceEnv(gym.Env):
         self._env = gym.make("HorseRace-v0")
 
         # --- Observation space ---
-        # Preprocessed RGB image at OBS_WIDTH × OBS_HEIGHT
+        # Flat structured vector (see _build_observation): navigation scalars +
+        # proprioception + one-hot block grid.  No pixels -> MlpPolicy.
         self.observation_space = gym.spaces.Box(
-            low=0,
-            high=255,
-            shape=(OBS_HEIGHT, OBS_WIDTH, 3),
-            dtype=np.uint8,
+            low=-np.inf,
+            high=np.inf,
+            shape=(OBS_DIM,),
+            dtype=np.float32,
         )
 
         # --- Action space ---
@@ -814,15 +846,98 @@ class HorseRaceEnv(gym.Env):
     # -- Observation helpers ---------------------------------------------
 
     @staticmethod
-    def _preprocess_obs(obs: dict) -> np.ndarray:
+    def _tangent_at_s(s, centerline=CENTERLINE):
+        """Unit tangent (travel direction) of the centerline at arc-length s."""
+        s_arr = centerline["s"]
+        verts = centerline["verts"]
+        s = s % centerline["total_length"]
+        for i in range(len(verts) - 1):
+            if s_arr[i] <= s <= s_arr[i + 1]:
+                dx = verts[i + 1][0] - verts[i][0]
+                dz = verts[i + 1][1] - verts[i][1]
+                n = np.hypot(dx, dz)
+                return (dx / n, dz / n) if n > 1e-9 else (0.0, 0.0)
+        dx = verts[-1][0] - verts[-2][0]
+        dz = verts[-1][1] - verts[-2][1]
+        n = np.hypot(dx, dz) or 1.0
+        return dx / n, dz / n
+
+    def _build_observation(self, raw_obs: dict) -> np.ndarray:
         """
-        Extract the POV image from the MineRL observation dict and resize
-        it to (OBS_HEIGHT, OBS_WIDTH, 3).
+        Build the flat structured observation fed to the MLP policy.
+
+        Layout (NUM_SCALARS scalars, then a GRID_CELLS x NUM_GRID_CLASSES
+        one-hot of the local block grid):
+          0  signed lateral offset from centerline   (/ OFFSET_NORM)
+          1  local corridor half-width               (/ OFFSET_NORM)
+          2  heading error sin   (facing vs track tangent)
+          3  heading error cos
+          4  turn-ahead sin      (tangent TRACK_LOOKAHEAD blocks ahead vs now)
+          5  turn-ahead cos
+          6  arc-length distance to next checkpoint   (/ CP_DIST_NORM)
+          7  yaw sin
+          8  yaw cos
+          9  pitch                                    (/ 90)
+          10 horizontal speed                         (/ SPEED_NORM)
+          11 vertical velocity (+ up)                 (/ SPEED_NORM)
+          12 forward speed (velocity . facing)        (/ SPEED_NORM)
         """
-        pov = obs["pov"]  # shape: (360, 640, 3) uint8
-        img = Image.fromarray(pov)
-        img = img.resize((OBS_WIDTH, OBS_HEIGHT), Image.BILINEAR)
-        return np.array(img, dtype=np.uint8)
+        obs = np.zeros(OBS_DIM, dtype=np.float32)
+
+        try:
+            loc = raw_obs["location_stats"]
+            x, y, z = float(loc["xpos"]), float(loc["ypos"]), float(loc["zpos"])
+            yaw = float(loc.get("yaw", 0.0))
+            pitch = float(loc.get("pitch", 0.0))
+        except Exception:
+            return obs  # no telemetry yet -> zeros
+
+        # Velocity from the previous step (0 at episode start, where _last_pos==pos).
+        if self._last_pos is not None:
+            vx = x - self._last_pos[0]
+            vy = y - self._last_pos[1]
+            vz = z - self._last_pos[2]
+        else:
+            vx = vy = vz = 0.0
+        speed = float(np.hypot(vx, vz))
+
+        # Facing unit vector (MC: yaw 0 -> +Z, increasing clockwise).
+        yaw_rad = np.radians(yaw)
+        fx, fz = -np.sin(yaw_rad), np.cos(yaw_rad)
+
+        # Track frame.
+        tp = self._project_to_centerline((x, y, z))
+        he_cos = fx * tp.tx + fz * tp.tz          # heading vs track tangent
+        he_sin = fx * tp.tz - fz * tp.tx
+        ax, az = self._tangent_at_s(tp.s + TRACK_LOOKAHEAD)
+        ta_cos = tp.tx * ax + tp.tz * az          # curvature ahead
+        ta_sin = tp.tx * az - tp.tz * ax
+        cp_name = CHECKPOINTS[self._next_checkpoint_idx]["name"]
+        cp_s = CENTERLINE["checkpoint_s"].get(cp_name, tp.s)
+        dist_cp = (cp_s - tp.s) % CENTERLINE["total_length"]
+        fwd_speed = vx * fx + vz * fz
+
+        obs[:NUM_SCALARS] = (
+            tp.signed_offset / OFFSET_NORM,
+            tp.half_width / OFFSET_NORM,
+            he_sin, he_cos,
+            ta_sin, ta_cos,
+            dist_cp / CP_DIST_NORM,
+            np.sin(yaw_rad), np.cos(yaw_rad),
+            pitch / 90.0,
+            speed / SPEED_NORM,
+            vy / SPEED_NORM,
+            fwd_speed / SPEED_NORM,
+        )
+
+        # One-hot the local block grid.
+        grid = raw_obs.get("floor_grid")
+        if grid is not None and len(grid) >= GRID_CELLS:
+            base = NUM_SCALARS
+            for i in range(GRID_CELLS):
+                cls = GRID_CLASS.get(str(grid[i]), GRID_CLASS_UNKNOWN)
+                obs[base + i * NUM_GRID_CLASSES + cls] = 1.0
+        return obs
 
     # -- Reward state & helpers ------------------------------------------
 
@@ -912,37 +1027,18 @@ class HorseRaceEnv(gym.Env):
         return False
 
     @staticmethod
-    def _dist_to_checkpoint(pos, cp) -> float:
-        """Euclidean XZ distance from pos to the midpoint of a checkpoint."""
-        mid_x = (cp["p1"][0] + cp["p2"][0]) / 2.0
-        mid_z = (cp["p1"][1] + cp["p2"][1]) / 2.0
-        return np.sqrt((pos[0] - mid_x) ** 2 + (pos[2] - mid_z) ** 2)
-
-    @staticmethod
-    def _min_dist_to_any_checkpoint(pos) -> float:
-        """Minimum XZ distance from pos to any checkpoint midpoint."""
-        return min(
-            HorseRaceEnv._dist_to_checkpoint(pos, cp) for cp in CHECKPOINTS
-        )
-
-    @staticmethod
-    def _project_to_centerline(pos, centerline=CENTERLINE):
+    def _project_to_centerline(pos, centerline=CENTERLINE) -> TrackProj:
         """
         Project an (x, ?, z) position onto the centerline polyline.
 
-        Returns (perp_dist, s_proj, half_width):
-          perp_dist  : perpendicular XZ distance to the nearest track segment
-          s_proj     : arc-length along the loop at the closest point
-          half_width : local corridor half-width at that point
+        Returns a TrackProj (perp, signed_offset, s, half_width, tx, tz).
         Exact point-to-segment over all ~33 segments (cheap, called per step).
         """
         px, pz = pos[0], pos[2]
         verts = centerline["verts"]
         s_arr = centerline["s"]
         hw_arr = centerline["half_width"]
-        best_d2 = np.inf
-        best_s = 0.0
-        best_hw = 0.0
+        best = None
         for i in range(len(verts) - 1):
             ax, az = verts[i]
             bx, bz = verts[i + 1]
@@ -955,11 +1051,18 @@ class HorseRaceEnv(gym.Env):
                 t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
             cx, cz = ax + t * dx, az + t * dz
             d2 = (px - cx) ** 2 + (pz - cz) ** 2
-            if d2 < best_d2:
-                best_d2 = d2
-                best_s = s_arr[i] + t * (s_arr[i + 1] - s_arr[i])
-                best_hw = hw_arr[i] + t * (hw_arr[i + 1] - hw_arr[i])
-        return float(np.sqrt(best_d2)), float(best_s), float(best_hw)
+            if best is None or d2 < best[0]:
+                best = (d2, i, t, cx, cz, dx, dz, seg_len2)
+        d2, i, t, cx, cz, dx, dz, seg_len2 = best
+        perp = float(np.sqrt(d2))
+        s = float(s_arr[i] + t * (s_arr[i + 1] - s_arr[i]))
+        hw = float(hw_arr[i] + t * (hw_arr[i + 1] - hw_arr[i]))
+        n = np.sqrt(seg_len2) if seg_len2 > 1e-9 else 1.0
+        tx, tz = dx / n, dz / n
+        # Signed: + when the point is left of the travel direction, - when right.
+        cross = tx * (pz - cz) - tz * (px - cx)
+        signed = perp if cross >= 0 else -perp
+        return TrackProj(perp, signed, s, hw, float(tx), float(tz))
 
     # -- Action helpers --------------------------------------------------
 
@@ -1143,12 +1246,12 @@ class HorseRaceEnv(gym.Env):
         pos = self._extract_position(obs)
         if pos is not None:
             self._last_pos = pos
-            _, self._last_s, _ = self._project_to_centerline(pos)
+            self._last_s = self._project_to_centerline(pos).s
             self._position_history.append(pos)
 
         # (The HUD is hidden natively via GameSettings.hideGUI in EnvServer.java.)
 
-        processed = self._preprocess_obs(obs)
+        processed = self._build_observation(obs)
         self._prev_obs = processed
         return processed
 
@@ -1184,7 +1287,7 @@ class HorseRaceEnv(gym.Env):
             self._last_raw_obs = obs
         except Exception:
             self._last_raw_obs = None
-        processed = self._preprocess_obs(obs)
+        processed = self._build_observation(obs)
 
         reward = self.compute_reward(
             obs=processed,
@@ -1222,7 +1325,7 @@ class HorseRaceEnv(gym.Env):
                 self._last_raw_obs = obs
             except Exception:
                 self._last_raw_obs = None
-            processed = self._preprocess_obs(obs)
+            processed = self._build_observation(obs)
 
             total_reward += self.compute_reward(
                 obs=processed,
@@ -1528,8 +1631,11 @@ class HorseRaceEnv(gym.Env):
           - Wrong direction (backward)    (PENALTY_WRONG_DIRECTION per step)
 
         Args:
-            obs:      Current preprocessed observation (H×W×3 uint8).
-            prev_obs: Previous preprocessed observation.
+            obs:      Current structured observation vector (float32, OBS_DIM)
+                      as built by _build_observation: navigation scalars +
+                      one-hot block grid. Not used here (reward derives from
+                      raw_obs); kept for signature symmetry.
+            prev_obs: Previous structured observation vector (same layout).
             action:   The discrete action index that was taken.
             raw_obs:  The raw MineRL observation dict (contains location_stats
                       and, if available, floor_grid).
@@ -1545,7 +1651,8 @@ class HorseRaceEnv(gym.Env):
         # Project onto the centerline once; reused by progress (2) and the
         # far-off-course cull (6).
         if pos is not None:
-            perp_dist, s_curr, half_width = self._project_to_centerline(pos)
+            _tp = self._project_to_centerline(pos)
+            perp_dist, s_curr, half_width = _tp.perp, _tp.s, _tp.half_width
         else:
             perp_dist = s_curr = half_width = None
 
@@ -1752,13 +1859,12 @@ class RewardTrackingCallback(BaseCallback):
                 logger.warning("Could not attach model to env %d: %s", i, e)
 
     def _get_inner_env(self, vec_env_idx: int):
-        """Navigate through SB3 VecEnv wrappers to reach HorseRaceEnv."""
-        # VecTransposeImage wraps DummyVecEnv; DummyVecEnv.envs is a list
+        """Navigate through any SB3 VecEnv wrappers to reach HorseRaceEnv."""
         venv = self.training_env
-        # Walk through VecEnvWrapper layers to find DummyVecEnv
+        # Walk through any VecEnvWrapper layers down to the DummyVecEnv.
         while hasattr(venv, "venv"):
             venv = venv.venv
-        # DummyVecEnv stores envs as a list
+        # DummyVecEnv stores the underlying envs as a list.
         return venv.envs[vec_env_idx]
 
     def _on_step(self) -> bool:
@@ -2150,12 +2256,10 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
 
     logger.info("Creating vectorised environment...")
     env = DummyVecEnv([make_env()])
+    # No VecTransposeImage: the policy consumes a flat structured vector, not
+    # pixels, so there is no (H,W,C) -> (C,H,W) image transpose to do.
 
-    # VecTransposeImage converts observations from (H, W, C) to (C, H, W)
-    # which is the format expected by PyTorch CNN policies.
-    env = VecTransposeImage(env)
-
-    logger.info("Initialising PPO with CnnPolicy...")
+    logger.info("Initialising PPO with MlpPolicy...")
 
     # Load the agent in ./agent if present, else train a fresh model.
     saved = resolve_load_path()
@@ -2167,7 +2271,7 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
             "No agent in '%s/', training from scratch.", LOAD_AGENT_DIR,
         )
         model = PPO(
-            policy="CnnPolicy",
+            policy="MlpPolicy",
             env=env,
             learning_rate=LEARNING_RATE,
             n_steps=N_STEPS,
@@ -2178,11 +2282,8 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
             clip_range=CLIP_RANGE,
             verbose=1,
             tensorboard_log=TENSORBOARD_LOG_DIR,
-            # Uncomment and modify the line below to use a custom visual encoder:
-            # policy_kwargs=dict(
-            #     features_extractor_class=MyCustomEncoder,
-            #     features_extractor_kwargs=dict(features_dim=512),
-            # ),
+            # Structured vector obs -> a modest MLP gives plenty of capacity.
+            policy_kwargs=dict(net_arch=[256, 256]),
         )
 
     # Attach the model to the env now (before learn()) so the in-frame Save
