@@ -765,10 +765,10 @@ ACTION_TABLE = [
     {"camera": np.array([0.0, -5.0])},
     # 6: Camera — look right
     {"camera": np.array([0.0, 5.0])},
-    # 7: Camera — look up
-    {"camera": np.array([-5.0, 0.0])},
-    # 8: Camera — look down
-    {"camera": np.array([5.0, 0.0])},
+    # # 7: Camera — look up
+    # {"camera": np.array([-5.0, 0.0])},
+    # # 8: Camera — look down
+    # {"camera": np.array([5.0, 0.0])},
     # 9: Charge Jump (macro) — holds forward+jump for CHARGE_JUMP_TICKS ticks
     #    to clear 2-block fences. Handled specially in step().
     {"forward": 1, "jump": 1},
@@ -990,7 +990,7 @@ class HorseRaceEnv(gym.Env):
             y_off = 4 - HORSE_Y_OFFSET  # y=-HORSE_Y_OFFSET relative to min_y=-4
             idx = y_off * 25 + 2 * 5 + 2  # center x and z
             return str(grid[idx])
-        except Exception:
+        except KeyError:
             return "unknown"
 
     @staticmethod
@@ -1646,6 +1646,10 @@ class HorseRaceEnv(gym.Env):
         reward = 0.0
         pos = self._extract_position(raw_obs)
         ground_block = self._extract_ground_block(raw_obs)
+        if ground_block == "unknown" and self._step_count % 50 == 0:
+            logger.warning("Ground block not detected. floor_grid is None")
+        elif self._step_count % 50 == 0:
+            logger.log(f"Ground Block Detected: {ground_block}")
         self._last_ground_block = ground_block
 
         # Project onto the centerline once; reused by progress (2) and the
