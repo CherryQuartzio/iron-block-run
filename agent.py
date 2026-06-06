@@ -147,14 +147,14 @@ REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
 REWARD_PROGRESS = 0.1           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
 REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
-REWARD_SPRUCE_SLAB = 3.5        # Standing on spruce_slab (bridge over water)
+REWARD_SPRUCE_SLAB = 0.5        # Standing on spruce_slab (bridge over water)
 PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
 PENALTY_WATER = -0.5            # Per-step: in water
-PENALTY_COBWEB = -1.0           # Per-step: in cobweb
+PENALTY_COBWEB = -0.5           # Per-step: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -20.0            # Terminal: stuck too long
-PENALTY_FAR_OFF_COURSE = -10.0   # Terminal: too far from track
+PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 PENALTY_AIR_TIME = -0.1        # Per-step: in the air. Small to avoid excess jumping.
 
