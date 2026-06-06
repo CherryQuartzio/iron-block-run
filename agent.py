@@ -147,16 +147,16 @@ REWARD_LAP_COMPLETE = 200.0     # Crossing start/goal after all checkpoints
 REWARD_PROGRESS = 0.1           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
 REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
-REWARD_SPRUCE_SLAB = 1.0        # Standing on spruce_slab (bridge over water)
+REWARD_SPRUCE_SLAB = 3.5        # Standing on spruce_slab (bridge over water)
 PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
 PENALTY_WATER = -0.5            # Per-step: in water
 PENALTY_COBWEB = -1.0           # Per-step: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
-PENALTY_STUCK = -5.0            # Terminal: stuck too long
+PENALTY_STUCK = -20.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -5.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
-PENALTY_AIR_TIME = -0.2        # Per-step: in the air. Small to avoid excess jumping.
+PENALTY_AIR_TIME = -0.1        # Per-step: in the air. Small to avoid excess jumping.
 
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
@@ -346,6 +346,7 @@ GRID_CLASS_UNKNOWN = 6
 NUM_GRID_CLASSES = 7
 GRID_CELLS = 27                # floor_grid is 5x5x5 (x,z in [-2,2], y in [-4,0])
 CENTER_BLOCK = GRID_CELLS // 2
+BLOCK_ABOVE_CENTER_BLOCK = 18 + 5
 NUM_SCALARS = 13               # see HorseRaceEnv._build_observation
 OBS_DIM = NUM_SCALARS + GRID_CELLS * NUM_GRID_CLASSES  # 888
 
@@ -797,8 +798,8 @@ ACTION_TABLE = [
     {"forward": 1, "left": 1},
     # 3: Forward + Right
     {"forward": 1, "right": 1},
-    # 4: Forward + Jump (single tick tap)
-    {"forward": 1, "jump": 1},
+    # # 4: Forward + Jump (single tick tap)
+    # {"forward": 1, "jump": 1},
     # 5: Camera — look left
     {"camera": np.array([0.0, -5.0])},
     # 6: Camera — look right
@@ -809,11 +810,32 @@ ACTION_TABLE = [
     # {"camera": np.array([5.0, 0.0])},
     # 9: Charge Jump (macro) — holds forward+jump for CHARGE_JUMP_TICKS ticks
     #    to clear 2-block fences. Handled specially in step().
-    {"forward": 1, "jump": 1},
+    # {"forward":  1, "jump": 1},
 ]
 
 ACTION_CHARGE_JUMP = 9  # Index of the charge-jump macro action
 NUM_ACTIONS = len(ACTION_TABLE)
+
+
+def _patch_minerl_obs_space_sample(space) -> None:
+    """Make MineRL's timeout recovery compatible with modern gym spaces.
+
+    On comms timeout, MineRL calls ``observation_space.sample(bs)``, but gym's
+    Box/Dict.sample() no longer accepts a batch-size argument — that raises
+    TypeError and kills training instead of ending the episode.
+    """
+    if hasattr(space, "spaces"):
+        for sub in space.spaces.values():
+            _patch_minerl_obs_space_sample(sub)
+    orig = space.sample
+
+    def patched(*args, **kwargs):
+        try:
+            return orig(*args, **kwargs)
+        except TypeError:
+            return orig()
+
+    space.sample = patched
 
 
 class HorseRaceEnv(gym.Env):
@@ -832,6 +854,7 @@ class HorseRaceEnv(gym.Env):
 
         # Create the inner MineRL environment from our registered spec
         self._env = gym.make("HorseRace-v0")
+        _patch_minerl_obs_space_sample(self._env.observation_space)
 
         # --- Observation space ---
         # Flat structured vector (see _build_observation): navigation scalars +
@@ -1014,11 +1037,11 @@ class HorseRaceEnv(gym.Env):
             grid = obs.get("floor_grid")
             if grid is None or len(grid) < GRID_CELLS:
                 logger.error("[_extract_ground_block]: grid is None or grid does not match GRID CELLS.")
-                return "unknown"
-            return grid[CENTER_BLOCK]
+                return "unknown", "unknown"
+            return grid[CENTER_BLOCK], grid[BLOCK_ABOVE_CENTER_BLOCK]
         except Exception as e:
             logger.error(e)
-            return "unknown"
+            return "unknown", "unknown"
 
     @staticmethod
     def _checkpoint_crossed(pos, prev_pos, cp) -> bool:
@@ -1164,7 +1187,7 @@ class HorseRaceEnv(gym.Env):
         noop = self._get_noop_action()
         pre_mount_y = None
         for _ in range(5):
-            obs, _, done, _ = self._env.step(noop)
+            obs, _, done, _ = self._unpack_step(self._minerl_step(noop))
             if done:
                 return obs
             try:
@@ -1177,7 +1200,7 @@ class HorseRaceEnv(gym.Env):
         # so the agent would right-click empty air and never mount.
         look_down = self._get_noop_action()
         look_down["camera"] = np.array([MOUNT_LOOK_DOWN_DEG, 0.0], dtype=np.float32)
-        obs, _, done, _ = self._env.step(look_down)
+        obs, _, done, _ = self._unpack_step(self._minerl_step(look_down))
         if done:
             return obs
 
@@ -1191,7 +1214,7 @@ class HorseRaceEnv(gym.Env):
         approach["use"] = 1              # right-click: mounts once in reach
         mounted = False
         for _ in range(MOUNT_MAX_STEPS):
-            obs, _, done, _ = self._env.step(approach)
+            obs, _, done, _ = self._unpack_step(self._minerl_step(approach))
             if done:
                 return obs
             try:
@@ -1206,13 +1229,13 @@ class HorseRaceEnv(gym.Env):
         if mounted:
             look_up = self._get_noop_action()
             look_up["camera"] = np.array([-MOUNT_LOOK_DOWN_DEG, 0.0], dtype=np.float32)
-            obs, _, done, _ = self._env.step(look_up)
+            obs, _, done, _ = self._unpack_step(self._minerl_step(look_up))
             if done:
                 return obs
 
         # Small pause to let mounting animation complete
         for _ in range(5):
-            obs, _, done, _ = self._env.step(noop)
+            obs, _, done, _ = self._unpack_step(self._minerl_step(noop))
             if done:
                 return obs
 
@@ -1239,6 +1262,29 @@ class HorseRaceEnv(gym.Env):
         # obs, _, done, _ = self._env.step(rotate_action)
 
         return obs
+
+    def _minerl_step(self, minerl_action):
+        """Call the inner MineRL env, surviving comms / recovery failures."""
+        try:
+            return self._env.step(minerl_action)
+        except (TimeoutError, TypeError, OSError, ConnectionError) as e:
+            logger.error(
+                "MineRL step failed (%s); forcing episode end", e, exc_info=True,
+            )
+            fallback = (
+                self._last_raw_obs
+                if isinstance(self._last_raw_obs, dict)
+                else {}
+            )
+            return fallback, 0.0, True, {"error": str(e)}
+
+    @staticmethod
+    def _unpack_step(result):
+        if len(result) == 5:
+            obs, reward, terminated, truncated, info = result
+            return obs, reward, terminated or truncated, info
+        obs, reward, done, info = result
+        return obs, reward, done, info
 
     # -- Gym API ---------------------------------------------------------
 
@@ -1297,12 +1343,11 @@ class HorseRaceEnv(gym.Env):
             return self._step_charge_jump()
 
         minerl_action = self._map_action(action)
-        result = self._env.step(minerl_action)
-        if len(result) == 5:
-            obs, _minerl_reward, terminated, truncated, info = result
-            done = terminated or truncated
-        else:
-            obs, _minerl_reward, done, info = result
+        obs, _minerl_reward, done, info = self._unpack_step(
+            self._minerl_step(minerl_action),
+        )
+        if info.get("error"):
+            logger.warning("MineRL reported step error: %s", info["error"])
 
         # Increment step counter and log position
         self._step_count += 1
@@ -1338,12 +1383,9 @@ class HorseRaceEnv(gym.Env):
         jump_action = self._map_action(ACTION_CHARGE_JUMP)
 
         for tick in range(CHARGE_JUMP_TICKS):
-            result = self._env.step(jump_action)
-            if len(result) == 5:
-                obs, _, terminated, truncated, info = result
-                done = terminated or truncated
-            else:
-                obs, _, done, info = result
+            obs, _, done, info = self._unpack_step(self._minerl_step(jump_action))
+            if info.get("error"):
+                logger.warning("MineRL reported step error: %s", info["error"])
 
             self._step_count += 1
             # self._log_position(obs, step=self._step_count)
@@ -1672,7 +1714,7 @@ class HorseRaceEnv(gym.Env):
         """
         reward = 0.0
         pos = self._extract_position(raw_obs)
-        ground_block = self._extract_ground_block(raw_obs)
+        ground_block, above_block = self._extract_ground_block(raw_obs)
         if ground_block == "unknown" and self._step_count % 50 == 0:
             logger.warning("Ground block not detected. Unknown or something went wrong.")
         elif self._step_count % 50 == 0:
@@ -1744,8 +1786,9 @@ class HorseRaceEnv(gym.Env):
                     reward += PENALTY_WRONG_DIRECTION
 
         # ---- 3. Block-type rewards / penalties -------------------------
-
-        if ground_block in ("grass_path", "dirt_path"):
+        if above_block == "water": # underwater
+            reward += PENALTY_WATER
+        elif ground_block in ("grass_path", "dirt_path"):
             reward += REWARD_ON_PATH
         elif ground_block == "gold_block":
             reward += REWARD_GOLD_BLOCK
@@ -2332,27 +2375,20 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     # once Minecraft has actually launched. Waiting for the window here is
     # pointless because the env (and thus the window) only comes up once
     # model.learn() starts stepping.
-    
-    def save_on_c(signum, frame):
-        """Handler function triggered when SIGINT is received."""
-        print("Saving model on SIGINT...")
-        final_path = new_checkpoint_path()
-        model.save(final_path)
-        logger.info(f"Model saved to {final_path}.zip")
-        os.kill(os.getpid(), signal.SIGINT)
-
-    # Register the handler function for SIGINT
-    signal.signal(signal.SIGINT, save_on_c)
-    logger.info("Registered signal handler for SIGINT.")
-    logger.info(f"Starting training for {total_timesteps:,} timesteps...")
     # Timestamped run name so each launch lands in its own TensorBoard subdir
     # (tb_logs/horserace_<stamp>_1) instead of overwriting prior runs.
     run_name = f"horserace_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    model.learn(
-        total_timesteps=total_timesteps,
-        callback=reward_callback,
-        tb_log_name=run_name,
-    )
+    try:
+        model.learn(
+            total_timesteps=total_timesteps,
+            callback=reward_callback,
+            tb_log_name=run_name,
+        )
+    except:
+        final_path = new_checkpoint_path()
+        model.save(final_path)
+        logger.info(f"Model saved to {final_path}.zip")
+        raise
 
     # Save the trained model as a timestamped checkpoint in saved_agent/
     final_path = new_checkpoint_path()
