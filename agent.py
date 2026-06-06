@@ -14,6 +14,7 @@ Usage:
     xvfb-run python agent.py
 """
 import os
+import signal
 import glob
 import logging
 import collections
@@ -155,7 +156,7 @@ PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -5.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -5.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
-PENALTY_AIR_TIME = -0.05        # Per-step: in the air. Small to avoid excess jumping.
+PENALTY_AIR_TIME = -0.2        # Per-step: in the air. Small to avoid excess jumping.
 
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
@@ -2331,7 +2332,18 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     # once Minecraft has actually launched. Waiting for the window here is
     # pointless because the env (and thus the window) only comes up once
     # model.learn() starts stepping.
+    
+    def save_on_c(signum, frame):
+        """Handler function triggered when SIGINT is received."""
+        print("Saving model on SIGINT...")
+        final_path = new_checkpoint_path()
+        model.save(final_path)
+        logger.info(f"Model saved to {final_path}.zip")
+        os.kill(os.getpid(), signal.SIGINT)
 
+    # Register the handler function for SIGINT
+    signal.signal(signal.SIGINT, save_on_c)
+    logger.info("Registered signal handler for SIGINT.")
     logger.info(f"Starting training for {total_timesteps:,} timesteps...")
     # Timestamped run name so each launch lands in its own TensorBoard subdir
     # (tb_logs/horserace_<stamp>_1) instead of overwriting prior runs.
