@@ -143,7 +143,7 @@ TICKS_PER_SECOND = 20  # Minecraft runs at 20 ticks per second
 
 # -- Reward constants (tunable) --
 REWARD_CHECKPOINT = 50.0        # Crossing the next expected checkpoint
-REWARD_LAP_COMPLETE = 200.0     # Crossing start/goal after all checkpoints
+REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
 REWARD_PROGRESS = 0.1           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
 REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
@@ -154,7 +154,7 @@ PENALTY_COBWEB = -1.0           # Per-step: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -20.0            # Terminal: stuck too long
-PENALTY_FAR_OFF_COURSE = -5.0   # Terminal: too far from track
+PENALTY_FAR_OFF_COURSE = -10.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 PENALTY_AIR_TIME = -0.1        # Per-step: in the air. Small to avoid excess jumping.
 
@@ -1719,6 +1719,10 @@ class HorseRaceEnv(gym.Env):
             logger.warning("Ground block not detected. Unknown or something went wrong.")
         elif self._step_count % 50 == 0:
             logger.info(f"Ground Block Detected: {ground_block}")
+            if above_block == "water":
+                logger.info(f"Agent is underwater.")
+            elif above_block == "cobweb":
+                logger.info(f"Agent is in a cobweb.")
         self._last_ground_block = ground_block
 
         # Project onto the centerline once; reused by progress (2) and the
@@ -1788,6 +1792,8 @@ class HorseRaceEnv(gym.Env):
         # ---- 3. Block-type rewards / penalties -------------------------
         if above_block == "water": # underwater
             reward += PENALTY_WATER
+        elif above_block == "cobweb":
+            reward += PENALTY_COBWEB
         elif ground_block in ("grass_path", "dirt_path"):
             reward += REWARD_ON_PATH
         elif ground_block == "gold_block":
@@ -2388,6 +2394,10 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
         final_path = new_checkpoint_path()
         model.save(final_path)
         logger.info(f"Model saved to {final_path}.zip")
+        plot_rewards(reward_callback.episode_rewards)
+        plot_race_time(reward_callback.episode_durations)
+        plot_segment_times(reward_callback.segment_times)
+        plot_completion_rate(reward_callback.completion_rates)
         raise
 
     # Save the trained model as a timestamped checkpoint in saved_agent/
