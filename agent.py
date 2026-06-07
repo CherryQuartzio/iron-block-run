@@ -142,18 +142,18 @@ COMPLETION_RATE_PLOT_PATH = "training_completion_rate.png"
 TICKS_PER_SECOND = 20  # Minecraft runs at 20 ticks per second
 
 # -- Reward constants (tunable) --
-REWARD_CHECKPOINT = 50.0        # Crossing the next expected checkpoint
+REWARD_CHECKPOINT = 40.0        # Crossing the next expected checkpoint
 REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
-REWARD_PROGRESS = 0.1           # Multiplier for distance-decrease toward next CP
+REWARD_PROGRESS = 0.2           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
 REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
-REWARD_SPRUCE_SLAB = 0.5        # Standing on spruce_slab (bridge over water)
+REWARD_SPRUCE_SLAB = 5.0        # Entering spruce_slab (bridge over water)
 PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
-PENALTY_WATER = -0.5            # Per-step: in water
+PENALTY_WATER = -1.0            # Per-step: in water
 PENALTY_COBWEB = -0.5           # Per-step: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
-PENALTY_STUCK = -20.0            # Terminal: stuck too long
+PENALTY_STUCK = -50.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 PENALTY_AIR_TIME = -0.1        # Per-step: in the air. Small to avoid excess jumping.
@@ -900,7 +900,7 @@ class HorseRaceEnv(gym.Env):
         self._step_count = 0
         self._episode_num = 0  # Incremented on each reset(); shown on the frame
         self._print_coords = True  # Set to False to disable position logging
-
+        self._spruce_slab_entered = False # Flag to track if agent has entered spruce_slab
         # --- Reward tracking state (reset each episode in reset()) ---
         self._init_reward_state()
 
@@ -1010,6 +1010,7 @@ class HorseRaceEnv(gym.Env):
         self._position_history = collections.deque(maxlen=STUCK_WINDOW)
         self._last_ground_block = "air"
         self._force_done = False          # Set True to end episode early
+        self._spruce_slab_entered = False
 
         # -- Timing / statistics state --
         self._episode_start_step = 0          # Set after mount in reset()
@@ -1798,8 +1799,10 @@ class HorseRaceEnv(gym.Env):
             reward += REWARD_ON_PATH
         elif ground_block == "gold_block":
             reward += REWARD_GOLD_BLOCK
-        elif ground_block in ("spruce_slab",):
+        elif ground_block in ("spruce_slab",) and not self._spruce_slab_entered:
             reward += REWARD_SPRUCE_SLAB
+            logger.info(f"Agent is entering bridge. (+{REWARD_SPRUCE_SLAB})")
+            self._spruce_slab_entered = True
         elif ground_block == "soul_sand":
             reward += PENALTY_SOUL_SAND
         elif ground_block in ("water", "flowing_water"):
