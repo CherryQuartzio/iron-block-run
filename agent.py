@@ -144,12 +144,12 @@ TICKS_PER_SECOND = 20  # Minecraft runs at 20 ticks per second
 # -- Reward constants (tunable) --
 REWARD_CHECKPOINT = 40.0        # Crossing the next expected checkpoint
 REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
-REWARD_PROGRESS = 0.2           # Multiplier for distance-decrease toward next CP
+REWARD_PROGRESS = 0.5           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
 REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
 REWARD_SPRUCE_SLAB = 5.0        # Entering spruce_slab (bridge over water)
 PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
-PENALTY_WATER = -1.0            # Per-step: in water
+PENALTY_WATER = -0.5            # Per-step: in water
 PENALTY_COBWEB = -0.5           # Per-step: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
@@ -1800,9 +1800,12 @@ class HorseRaceEnv(gym.Env):
         elif ground_block == "gold_block":
             reward += REWARD_GOLD_BLOCK
         elif ground_block in ("spruce_slab",) and not self._spruce_slab_entered:
-            reward += REWARD_SPRUCE_SLAB
-            logger.info(f"Agent is entering bridge. (+{REWARD_SPRUCE_SLAB})")
-            self._spruce_slab_entered = True
+            if self._spruce_slab_entered:
+                reward += REWARD_ON_PATH
+            else:
+                reward += REWARD_SPRUCE_SLAB
+                logger.info(f"Agent is entering bridge. (+{REWARD_SPRUCE_SLAB})")
+                self._spruce_slab_entered = True
         elif ground_block == "soul_sand":
             reward += PENALTY_SOUL_SAND
         elif ground_block in ("water", "flowing_water"):

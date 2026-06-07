@@ -6,3 +6,6 @@ com/
 __pycache__
 tb_logs/
 saved_agents/
+agent/
+agent_archive/
+agent_jump/
