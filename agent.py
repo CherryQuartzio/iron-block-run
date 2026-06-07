@@ -908,6 +908,7 @@ class HorseRaceEnv(gym.Env):
         self._print_coords = True  # Set to False to disable position logging
         self._spruce_slab_entered = False # Flag to track if agent has entered spruce_slab
         self._gold_block_entered = False # Flag to track if agent has entered gold_block recently
+        self._lap_complete_step = 0 # Step when lap was completed
         # --- Reward tracking state (reset each episode in reset()) ---
         self._init_reward_state()
 
@@ -1017,7 +1018,8 @@ class HorseRaceEnv(gym.Env):
         self._position_history = collections.deque(maxlen=STUCK_WINDOW)
         self._last_ground_block = "air"
         self._force_done = False          # Set True to end episode early
-        self._spruce_slab_entered = False
+        self._spruce_slab_entered = False # set back to reset
+        self._lap_complete_step = 0 # set back to reset
 
         # -- Timing / statistics state --
         self._episode_start_step = 0          # Set after mount in reset()
@@ -1764,7 +1766,8 @@ class HorseRaceEnv(gym.Env):
                     reward += REWARD_LAP_COMPLETE
                     self._lap_complete = True
                     self._spruce_slab_entered = False
-                    logger.info(">>> LAP COMPLETE!")
+                    logger.info(f">>> LAP COMPLETE! (+{REWARD_LAP_COMPLETE}). Completed in {self._step_count - self._lap_complete_step} steps.")
+                    self._lap_complete_step = self._step_count
                 else:
                     reward += REWARD_CHECKPOINT
                     logger.info(
