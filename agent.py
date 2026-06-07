@@ -158,6 +158,12 @@ PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 PENALTY_AIR_TIME = -0.1        # Per-step: in the air. Small to avoid excess jumping.
 
+OPTIMIZE_SPEED = True 
+if OPTIMIZE_SPEED: # Rewards to change if optimizing speed
+    REWARD_CHECKPOINT = 20.0
+    REWARD_LAP_COMPLETE = 100.0
+    PENALTY_TIME = -0.05
+
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
 STUCK_MIN_DISPLACEMENT = 1.0    # Minimum blocks moved in STUCK_WINDOW steps
@@ -901,6 +907,7 @@ class HorseRaceEnv(gym.Env):
         self._episode_num = 0  # Incremented on each reset(); shown on the frame
         self._print_coords = True  # Set to False to disable position logging
         self._spruce_slab_entered = False # Flag to track if agent has entered spruce_slab
+        self._gold_block_entered = False # Flag to track if agent has entered gold_block recently
         # --- Reward tracking state (reset each episode in reset()) ---
         self._init_reward_state()
 
@@ -1756,6 +1763,7 @@ class HorseRaceEnv(gym.Env):
                     # Crossed start/goal → lap complete
                     reward += REWARD_LAP_COMPLETE
                     self._lap_complete = True
+                    self._spruce_slab_entered = False
                     logger.info(">>> LAP COMPLETE!")
                 else:
                     reward += REWARD_CHECKPOINT
@@ -1791,6 +1799,8 @@ class HorseRaceEnv(gym.Env):
                     reward += PENALTY_WRONG_DIRECTION
 
         # ---- 3. Block-type rewards / penalties -------------------------
+        if self._step_count % 100 == 0: # naive cooldown for blocks to avoid spamming rewards
+            self._gold_block_entered = False
         if above_block == "water": # underwater
             reward += PENALTY_WATER
         elif above_block == "cobweb":
@@ -1798,8 +1808,13 @@ class HorseRaceEnv(gym.Env):
         elif ground_block in ("grass_path", "dirt_path"):
             reward += REWARD_ON_PATH
         elif ground_block == "gold_block":
-            reward += REWARD_GOLD_BLOCK
-        elif ground_block in ("spruce_slab",) and not self._spruce_slab_entered:
+            if self._gold_block_entered:
+                reward += REWARD_ON_PATH
+            else:
+                reward += REWARD_GOLD_BLOCK
+                logger.info(f"Agent is on gold block. (+{REWARD_GOLD_BLOCK})")
+                self._gold_block_entered = True
+        elif ground_block in ("spruce_slab",):
             if self._spruce_slab_entered:
                 reward += REWARD_ON_PATH
             else:
