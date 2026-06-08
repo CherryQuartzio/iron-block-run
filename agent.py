@@ -144,27 +144,30 @@ TRAINING_METRICS_JSON_PATH = "training_metrics.json"
 TICKS_PER_SECOND = 20  # Minecraft runs at 20 ticks per second
 
 # -- Reward constants (tunable) --
-REWARD_CHECKPOINT = 40.0        # Crossing the next expected checkpoint
+REWARD_CHECKPOINT = 50.0        # Crossing the next expected checkpoint
 REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
 REWARD_PROGRESS = 0.5           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
 REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
 REWARD_SPRUCE_SLAB = 5.0        # Entering spruce_slab (bridge over water)
 PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
-PENALTY_WATER = -0.5            # Per-step: in water
-PENALTY_COBWEB = -0.5           # Per-step: in cobweb
+PENALTY_WATER = -5.0            # On entry: in water
+REWARD_WATER_ESCAPE = 5.0        # On escape: out of water
+PENALTY_COBWEB = -3           # On entry: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -50.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
-PENALTY_AIR_TIME = -0.1        # Per-step: in the air. Small to avoid excess jumping.
 
 OPTIMIZE_SPEED = True 
 if OPTIMIZE_SPEED: # Rewards to change if optimizing speed
-    REWARD_CHECKPOINT = 20.0
-    REWARD_LAP_COMPLETE = 100.0
+    REWARD_CHECKPOINT = 30.0
+    REWARD_LAP_COMPLETE = 180.0
     PENALTY_TIME = -0.05
+    PENALTY_SOUL_SAND = -0.75
+    PENALTY_COBWEB = -5.0
+    PENALTY_WATER = -10.0
 
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
@@ -910,6 +913,8 @@ class HorseRaceEnv(gym.Env):
         self._print_coords = True  # Set to False to disable position logging
         self._spruce_slab_entered = False # Flag to track if agent has entered spruce_slab
         self._gold_block_entered = False # Flag to track if agent has entered gold_block recently
+        self._in_water = False # Flag to track if agent is in water
+        self._in_cobweb = False # Flag to track if agent is in cobweb
         self._lap_complete_step = 0 # Step when lap was completed
         # --- Reward tracking state (reset each episode in reset()) ---
         self._init_reward_state()
@@ -1065,7 +1070,7 @@ class HorseRaceEnv(gym.Env):
             if grid is None or len(grid) < GRID_CELLS:
                 logger.error("[_extract_ground_block]: grid is None or grid does not match GRID CELLS.")
                 return "unknown", "unknown"
-            return grid[CENTER_BLOCK], grid[BLOCK_ABOVE_CENTER_BLOCK]
+            return grid
         except Exception as e:
             logger.error(e)
             return "unknown", "unknown"
@@ -1745,15 +1750,12 @@ class HorseRaceEnv(gym.Env):
         """
         reward = 0.0
         pos = self._extract_position(raw_obs)
-        ground_block, above_block = self._extract_ground_block(raw_obs)
+        grid = self._extract_ground_block(raw_obs)
+        ground_block, above_block = grid[CENTER_BLOCK], grid[BLOCK_ABOVE_CENTER_BLOCK]
         if ground_block == "unknown" and self._step_count % 50 == 0:
             logger.warning("Ground block not detected. Unknown or something went wrong.")
         elif self._step_count % 50 == 0:
             logger.info(f"Ground Block Detected: {ground_block}")
-            if above_block == "water":
-                logger.info(f"Agent is underwater.")
-            elif above_block == "cobweb":
-                logger.info(f"Agent is in a cobweb.")
         self._last_ground_block = ground_block
 
         # Project onto the centerline once; reused by progress (2) and the
@@ -1825,10 +1827,24 @@ class HorseRaceEnv(gym.Env):
         # ---- 3. Block-type rewards / penalties -------------------------
         if self._step_count % 100 == 0: # naive cooldown for blocks to avoid spamming rewards
             self._gold_block_entered = False
+        if self._in_water and above_block != "water":
+            reward += REWARD_WATER_ESCAPE
+            self._in_water = False
+            logger.info(f"Agent has escaped water. (+{REWARD_WATER_ESCAPE})")
+        if self._in_cobweb and "cobweb" not in (grid[BLOCK_ABOVE_CENTER_BLOCK], grid[BLOCK_ABOVE_CENTER_BLOCK+1], grid[BLOCK_ABOVE_CENTER_BLOCK-1], grid[BLOCK_ABOVE_CENTER_BLOCK+3], grid[BLOCK_ABOVE_CENTER_BLOCK-3]):
+            logger.info(f"Agent has escaped cobweb.")
+            self._in_cobweb = False
+
         if above_block == "water": # underwater
-            reward += PENALTY_WATER
-        elif above_block == "cobweb":
-            reward += PENALTY_COBWEB
+            if not self._in_water:
+                reward += PENALTY_WATER
+                self._in_water = True
+                logger.info(f"Agent has entered water. ({PENALTY_WATER})")
+        elif "cobweb" in (grid[BLOCK_ABOVE_CENTER_BLOCK], grid[BLOCK_ABOVE_CENTER_BLOCK+1], grid[BLOCK_ABOVE_CENTER_BLOCK-1], grid[BLOCK_ABOVE_CENTER_BLOCK+3], grid[BLOCK_ABOVE_CENTER_BLOCK-3]):
+            if not self._in_cobweb:
+                reward += PENALTY_COBWEB
+                logger.info(f"Agent is in cobweb. ({PENALTY_COBWEB})")
+                self._in_cobweb = True
         elif ground_block in ("grass_path", "dirt_path"):
             reward += REWARD_ON_PATH
         elif ground_block == "gold_block":
@@ -1846,15 +1862,13 @@ class HorseRaceEnv(gym.Env):
                 logger.info(f"Agent is entering bridge. (+{REWARD_SPRUCE_SLAB})")
                 self._spruce_slab_entered = True
         elif ground_block == "soul_sand":
-            reward += PENALTY_SOUL_SAND
-        elif ground_block in ("water", "flowing_water"):
-            reward += PENALTY_WATER
+            reward += PENALTY_SOUL_SAND            
         elif ground_block == "cobweb":
             reward += PENALTY_COBWEB
-        elif ground_block == "grass_block":
+        elif ground_block in ("air", "cave_air"):
+            pass
+        else: # grass block, dirt, clay
             reward += PENALTY_OFF_COURSE
-        elif ground_block == "air":
-            reward += PENALTY_AIR_TIME
 
         # ---- 4. Time penalty -------------------------------------------
         reward += PENALTY_TIME
