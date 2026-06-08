@@ -149,10 +149,10 @@ REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
 REWARD_PROGRESS = 0.5           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
 REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
-REWARD_SPRUCE_SLAB = 5.0        # Entering spruce_slab (bridge over water)
+REWARD_SPRUCE_SLAB = 2.5        # Entering spruce_slab (bridge over water)
 PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
 PENALTY_WATER = -5.0            # On entry: in water
-REWARD_WATER_ESCAPE = 5.0        # On escape: out of water
+REWARD_WATER_ESCAPE = 2.5        # On escape: out of water
 PENALTY_COBWEB = -3           # On entry: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
@@ -160,7 +160,7 @@ PENALTY_STUCK = -50.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 
-OPTIMIZE_SPEED = True 
+OPTIMIZE_SPEED = False 
 if OPTIMIZE_SPEED: # Rewards to change if optimizing speed
     REWARD_CHECKPOINT = 30.0
     REWARD_LAP_COMPLETE = 180.0
@@ -1026,6 +1026,8 @@ class HorseRaceEnv(gym.Env):
         self._last_ground_block = "air"
         self._force_done = False          # Set True to end episode early
         self._spruce_slab_entered = False # set back to reset
+        self._in_water = False # set back to reset
+        self._in_cobweb = False # set back to reset
         self._lap_complete_step = 0 # set back to reset
 
         # -- Timing / statistics state --
