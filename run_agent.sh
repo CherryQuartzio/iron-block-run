@@ -16,11 +16,17 @@ usage() {
     echo "  --nv, --headless   Run without vision/display mode (headless)."
     echo "  --gui, --vnc        Run with VNC/noVNC GUI mode enabled (default)."
     echo "  --vision            Run with vision mode enabled using host display."
+    echo "  --no-lan            Disable integrated-server LAN publishing."
+    echo "  --no-persistent     Full world reload on each episode reset."
+    echo "  --lan-port PORT     Internal LAN bind port (default 25565)."
     echo "  -h, --help          Show this help message."
     exit 1
 }
 
 # Parse options
+export MINERL_LAN_ENABLED="true"
+export MINERL_PERSISTENT_SERVER="true"
+export MINERL_LAN_PORT="25565"
 AGENT_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -35,6 +41,18 @@ while [[ $# -gt 0 ]]; do
         --vision)
             MODE="vision"
             shift
+            ;;
+        --no-lan)
+            export MINERL_LAN_ENABLED="false"
+            shift
+            ;;
+        --no-persistent)
+            export MINERL_PERSISTENT_SERVER="false"
+            shift
+            ;;
+        --lan-port)
+            export MINERL_LAN_PORT="$2"
+            shift 2
             ;;
         -h|--help)
             usage

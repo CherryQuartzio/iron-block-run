@@ -67,6 +67,22 @@ from stable_baselines3.common.callbacks import BaseCallback
 WORLD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "world")
 WORLD_ZIP = None  # Set at runtime by prepare_world_zip()
 
+# -- Spectator / persistent server (multiplayer branch) --
+LAN_ENABLED = os.environ.get("MINERL_LAN_ENABLED", "true").lower() not in ("0", "false", "no")
+LAN_PORT = int(os.environ.get("MINERL_LAN_PORT", "25565"))
+LAN_PUBLISHED_PORT = os.environ.get("MINERL_LAN_PUBLISHED_PORT", "25560")
+PERSISTENT_SERVER = os.environ.get("MINERL_PERSISTENT_SERVER", "true").lower() not in ("0", "false", "no")
+
+
+def _apply_minerl_runtime_env() -> None:
+    """Export env vars read by patched EnvServer.java in the MCP-Reborn process."""
+    os.environ["MINERL_LAN_ENABLED"] = "true" if LAN_ENABLED else "false"
+    os.environ["MINERL_LAN_PORT"] = str(LAN_PORT)
+    os.environ["MINERL_PERSISTENT_SERVER"] = "true" if PERSISTENT_SERVER else "false"
+
+
+_apply_minerl_runtime_env()
+
 # -- Agent spawn --
 SPAWN_X = -73.0
 SPAWN_Y = 71.0      # Ground level at spawn (world block surface ~Y=70)

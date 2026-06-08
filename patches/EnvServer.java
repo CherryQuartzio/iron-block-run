@@ -25,6 +25,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.nbt.CompoundNBT;
+import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.inventory.EquipmentSlotType;
@@ -32,6 +33,7 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.profiler.IResultableProfiler;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.integrated.IntegratedServer;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundCategory;
 import net.minecraft.util.datafix.codec.DatapackCodec;
@@ -90,6 +92,8 @@ public class EnvServer {
 
     private int envTickCounter = -1;
     private MissionInit missionInit;
+    private String activeWorldSource = null;
+    private boolean lanPublished = false;
 
     private int port;
     private String version;
@@ -160,13 +164,13 @@ public class EnvServer {
 
                                 } else if (command.startsWith("<Quit")) {
 
-                                    quit(command, socket);
+                                    quit(command, socket, false);
 
                                     // profiler.profilingEnabled = false;
 
                                 } else if (command.startsWith("<Exit")) {
 
-                                    quit(command, socket);
+                                    quit(command, socket, true);
                                     AzureUpload.finish();
                                     Minecraft.getInstance().shutdown();
 
@@ -284,40 +288,45 @@ public class EnvServer {
 
         final Long final_seed = seed;
 
+        this.doneOnDeath = isDoneOnDeath(missionInit);
+
         setGameSetttings(missionInit);
         mc.getSession().setUsername(missionInit.getMission().getAgentSection().get(0).getName());
         setUsername(missionInit);
-        mc.execute(() -> loadOrCreateWorld(missionInit, final_seed));
+
+        String worldSrc = getSaveFile(missionInit);
+        boolean reuseWorld = canReuseWorld(worldSrc);
+
+        if (reuseWorld) {
+            LOGGER.info("[Persistent] Soft episode reset — reusing loaded world");
+            mc.execute(() -> resetAgentForNewEpisode(missionInit));
+        } else {
+            activeWorldSource = null;
+            lanPublished = false;
+            mc.execute(() -> loadOrCreateWorld(missionInit, final_seed));
+            activeWorldSource = worldSrc;
+        }
+
         while (!PlayRecorder.getInstance().isRecording()) {
             Thread.sleep(10);
         }
 
-        mc.execute(() -> setAgentInventory(mc.player, missionInit));
-        mc.execute(() -> {
-            setAgentPosition(mc.player, missionInit);
-            enforceAgentGameMode(missionInit);
-        });
+        if (!reuseWorld) {
+            maybeOpenToLan();
+            mc.execute(() -> resetAgentForNewEpisode(missionInit));
+        }
+
         envTickCounter = PlayRecorder.getInstance().getTickCounter();
-        // TODO possibly remove
-        // if necessary, can set this from missionInit ?
         int skipFrames = DEFAULT_SKIP_FIRST_FRAMES;
         for (int i = 0; i < skipFrames; i++) {
             execActions("camera 0 0.0", 0);
             waitForNextObservation();
         }
 
-        mc.execute(() -> applyWorldDecorators(missionInit));
         for (int i = 0; i < 5; i++) {
             execActions("camera 0 0.0", 0);
             waitForNextObservation();
         }
-
-        mc.execute( () -> {
-                    Pos startV = getAgentStart(missionInit).getVelocity();
-                    if (startV != null) {
-                        mc.player.setMotion(startV.getX(), startV.getY(), startV.getZ());
-                    }
-                });
 
 
         DataOutputStream dout = new DataOutputStream(socket.getOutputStream());
@@ -340,9 +349,6 @@ public class EnvServer {
             int slot = e.getValue().getSlot();
             Item item = Registry.ITEM.getOrDefault(new ResourceLocation(type));
             player.inventory.setInventorySlotContents(slot, new ItemStack(item, quantity));
-            Minecraft.getInstance().getIntegratedServer().getPlayerList().getPlayers().forEach( p -> {
-                    p.inventory.setInventorySlotContents(slot, new ItemStack(item, quantity));
-                });
         });
     }
 
@@ -978,21 +984,142 @@ public class EnvServer {
     }
 
     // Handler for <Quit> (quit mission) messages.
-    private void quit(String command, Socket socket) throws IOException, InterruptedException {
+    private void quit(String command, Socket socket, boolean forceHard) throws IOException, InterruptedException {
         Minecraft mc = Minecraft.getInstance();
         if (mc.getProfiler() instanceof IResultableProfiler) {
             File profileDump = new File("profile-results-" + (new SimpleDateFormat("yyyy-MM-dd_HH.mm.ss")).format(new Date()) + ".txt");
             ((IResultableProfiler)mc.getProfiler()).getResults().writeToFile(profileDump.getAbsoluteFile());
         }
         PlayRecorder.getInstance().finishAndResetEpisode();
-        ReplaySender.getInstance().stop();
 
-        while (!(mc.currentScreen instanceof MainMenuScreen)) {
-            Thread.sleep(10);
+        if (!forceHard && canSoftReset()) {
+            LOGGER.info("[Persistent] Soft quit — keeping integrated server and LAN clients");
+            ReplaySender.getInstance().clearEpisodeState();
+        } else {
+            ReplaySender.getInstance().stop();
+            activeWorldSource = null;
+            lanPublished = false;
+            while (!(mc.currentScreen instanceof MainMenuScreen)) {
+                Thread.sleep(10);
+            }
         }
+
         DataOutputStream dout = new DataOutputStream(socket.getOutputStream());
         dout.writeInt(4);
         dout.writeInt(1);
         dout.flush();
+    }
+
+    private boolean isPersistentServerEnabled() {
+        String enabled = System.getenv("MINERL_PERSISTENT_SERVER");
+        return enabled == null || !enabled.equalsIgnoreCase("false");
+    }
+
+    private boolean isLanEnabled() {
+        String enabled = System.getenv("MINERL_LAN_ENABLED");
+        return enabled == null || !enabled.equalsIgnoreCase("false");
+    }
+
+    private int getLanPort() {
+        int port = 25565;
+        String portEnv = System.getenv("MINERL_LAN_PORT");
+        if (portEnv != null) {
+            try {
+                port = Integer.parseInt(portEnv);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return port;
+    }
+
+    private boolean canSoftReset() {
+        if (!isPersistentServerEnabled()) {
+            return false;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        return mc.getIntegratedServer() != null && mc.world != null;
+    }
+
+    private boolean canReuseWorld(String worldSrc) {
+        return canSoftReset() && Objects.equals(worldSrc, activeWorldSource);
+    }
+
+    private void maybeOpenToLan() {
+        if (!isLanEnabled() || lanPublished) {
+            return;
+        }
+        int port = getLanPort();
+        Minecraft mc = Minecraft.getInstance();
+        mc.execute(() -> {
+            IntegratedServer server = mc.getIntegratedServer();
+            if (server == null) {
+                LOGGER.warn("[LAN] No integrated server; skipping shareToLAN");
+                return;
+            }
+            if (server.getPublic()) {
+                lanPublished = true;
+                LOGGER.info("[LAN] Already public on port {}", server.getServerPort());
+                return;
+            }
+            boolean ok = server.shareToLAN(GameType.SPECTATOR, true, port);
+            if (ok) {
+                lanPublished = true;
+                LOGGER.info("[LAN] Spectators can connect on internal port {} (publish external :25560 on Swarm)", server.getServerPort());
+            } else {
+                LOGGER.warn("[LAN] shareToLAN failed on port {} (in use?)", port);
+            }
+        });
+    }
+
+    private void resetAgentForNewEpisode(MissionInit missionInit) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            LOGGER.warn("[Persistent] Cannot reset agent: player is null");
+            return;
+        }
+
+        if (mc.player.isPassenger()) {
+            mc.player.stopRiding();
+        }
+        if (!mc.player.isAlive()) {
+            mc.player.respawnPlayer();
+        }
+
+        if (this.doneOnDeath) {
+            mc.setHasPlayerRespawned(false);
+        }
+
+        setAgentInventory(mc.player, missionInit);
+        setAgentPosition(mc.player, missionInit);
+        enforceAgentGameMode(missionInit);
+        cleanupEpisodeHorses(missionInit, mc);
+        applyWorldDecorators(missionInit);
+
+        Pos startV = getAgentStart(missionInit).getVelocity();
+        if (startV != null) {
+            mc.player.setMotion(startV.getX(), startV.getY(), startV.getZ());
+        }
+    }
+
+    private void cleanupEpisodeHorses(MissionInit missionInit, Minecraft mc) {
+        MinecraftServer server = mc.getIntegratedServer();
+        if (server == null) {
+            return;
+        }
+        ServerWorld serverWorld = server.getWorld(World.OVERWORLD);
+        PosAndDirection startPos = getAgentStart(missionInit).getPlacement();
+        double cx = startPos != null ? startPos.getX() : mc.player.getPosX();
+        double cy = startPos != null ? startPos.getY() : mc.player.getPosY();
+        double cz = startPos != null ? startPos.getZ() : mc.player.getPosZ();
+        double radius = 15.0;
+        AxisAlignedBB box = new AxisAlignedBB(
+            cx - radius, cy - radius, cz - radius,
+            cx + radius, cy + radius, cz + radius
+        );
+        List<HorseEntity> horses = serverWorld.getEntitiesWithinAABB(EntityType.HORSE, box, e -> true);
+        for (HorseEntity horse : horses) {
+            horse.remove();
+        }
+        LOGGER.info("[Persistent] Removed {} horse(s) near spawn", horses.size());
     }
 }

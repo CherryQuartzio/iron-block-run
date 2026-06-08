@@ -10,25 +10,33 @@ services:
       TEMP: /opt/tmp
       TMP: /opt/tmp
       JAVA_HOME: /opt/conda
-      DISPLAY: ":99"          # fixed — don't inherit host DISPLAY, Xvfb runs inside
+      DISPLAY: ":99"
+      MINERL_LAN_ENABLED: "true"
+      MINERL_LAN_PORT: "25565"
+      MINERL_PERSISTENT_SERVER: "true"
     volumes:
       - .:/workspace
       - minerl-tmp:/opt/tmp
-                              # removed: .Xauthority and X11-unix — not needed with internal Xvfb
     ports:
-      - "6080:6080"           # noVNC browser access
-    network_mode: host        # kept — but note this makes `ports` a no-op on Linux;
-                              # access via localhost:6080 directly on the host
+      - target: 6080
+        published: 6080
+        protocol: tcp
+        mode: ingress
+      - target: 25565
+        published: 25560
+        protocol: tcp
+        mode: ingress
     shm_size: "4gb"
     stdin_open: true
     tty: true
     command: tail -f /dev/null
     deploy:
+      replicas: 1
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              count: 1
               capabilities: [gpu]
 
 volumes:
