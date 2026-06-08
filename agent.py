@@ -153,21 +153,18 @@ REWARD_SPRUCE_SLAB = 2.5        # Entering spruce_slab (bridge over water)
 PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
 PENALTY_WATER = -5.0            # On entry: in water
 REWARD_WATER_ESCAPE = 2.5        # On escape: out of water
-PENALTY_COBWEB = -3           # On entry: in cobweb
+PENALTY_COBWEB = -3.0           # On entry: in cobweb
 PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -50.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 
-OPTIMIZE_SPEED = False 
+OPTIMIZE_SPEED = True 
 if OPTIMIZE_SPEED: # Rewards to change if optimizing speed
-    REWARD_CHECKPOINT = 30.0
-    REWARD_LAP_COMPLETE = 180.0
-    PENALTY_TIME = -0.05
-    PENALTY_SOUL_SAND = -0.75
-    PENALTY_COBWEB = -5.0
-    PENALTY_WATER = -10.0
+    PENALTY_TIME = -0.03
+    PENALTY_WATER = -6.0
+    PENALTY_COBWEB = -4.0
 
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 100              # Steps to check for stuck condition
@@ -203,7 +200,7 @@ CHECKPOINTS = [
 ]
 # fmt: on
 NUM_CHECKPOINTS = len(CHECKPOINTS)  # 6 (including start/goal)
-
+CHECKPOINT_TOLERANCE = 3.0 # Tolerance for checkpoint crossing in blocks
 # -- Track centerline --
 # Ordered waypoints tracing the racetrack centerline as a CLOSED LOOP.
 # Entry types:
@@ -1092,8 +1089,8 @@ class HorseRaceEnv(gym.Env):
         p1, p2 = cp["p1"], cp["p2"]
         if cp["axis"] == "z":
             gate_z = p1[1]  # constant Z
-            x_min = min(p1[0], p2[0])
-            x_max = max(p1[0], p2[0])
+            x_min = min(p1[0], p2[0]) - CHECKPOINT_TOLERANCE
+            x_max = max(p1[0], p2[0]) + CHECKPOINT_TOLERANCE
             # Check Z crossing
             if (prev_pos[2] - gate_z) * (pos[2] - gate_z) <= 0:
                 # Check X within gate span
@@ -1101,8 +1098,8 @@ class HorseRaceEnv(gym.Env):
                     return True
         else:  # axis == "x"
             gate_x = p1[0]  # constant X
-            z_min = min(p1[1], p2[1])
-            z_max = max(p1[1], p2[1])
+            z_min = min(p1[1], p2[1]) - CHECKPOINT_TOLERANCE
+            z_max = max(p1[1], p2[1]) + CHECKPOINT_TOLERANCE
             # Check X crossing
             if (prev_pos[0] - gate_x) * (pos[0] - gate_x) <= 0:
                 # Check Z within gate span
