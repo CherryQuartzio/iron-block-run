@@ -14,6 +14,7 @@ Usage:
     xvfb-run python agent.py
 """
 import os
+import json
 import signal
 import glob
 import logging
@@ -153,6 +154,7 @@ REWARD_PLOT_PATH = "training_rewards.png"
 RACE_TIME_PLOT_PATH = "training_race_time.png"
 SEGMENT_TIME_PLOT_PATH = "training_segment_times.png"
 COMPLETION_RATE_PLOT_PATH = "training_completion_rate.png"
+TRAINING_METRICS_JSON_PATH = "training_metrics.json"
 
 # -- Timing --
 TICKS_PER_SECOND = 20  # Minecraft runs at 20 ticks per second
@@ -1048,6 +1050,21 @@ class HorseRaceEnv(gym.Env):
         # Step when the agent entered the current segment (last checkpoint crossed)
         self._segment_enter_step = 0
 
+    def _episode_stats(self) -> dict:
+        """Snapshot per-episode timing/completion stats for the terminal step."""
+        if self._lap_complete:
+            total_steps = self._step_count - self._episode_start_step
+            duration_s = total_steps / TICKS_PER_SECOND
+        else:
+            duration_s = None
+        reached = sum(1 for t in self._checkpoint_times if t is not None)
+        return {
+            "lap_complete": self._lap_complete,
+            "duration_s": duration_s,
+            "segment_splits": list(self._segment_splits),
+            "completion_rate": reached / NUM_CHECKPOINTS,
+        }
+
     @staticmethod
     def _extract_position(obs: dict):
         """Return (x, y, z) from MineRL observation dict, or None."""
@@ -1396,6 +1413,8 @@ class HorseRaceEnv(gym.Env):
 
         done = done or self._force_done
         self._prev_obs = processed
+        if done:
+            info["episode_stats"] = self._episode_stats()
         return processed, reward, done, info
 
     def _step_charge_jump(self):
@@ -1437,6 +1456,8 @@ class HorseRaceEnv(gym.Env):
         if self._visualize:
             self.render()
 
+        if done:
+            info["episode_stats"] = self._episode_stats()
         return processed, total_reward, done, info
 
 
@@ -1944,7 +1965,78 @@ def attach_model_to_envs(vec_env, model) -> None:
 
 
 # ===========================================================================
-#  4. Reward Tracking Callback
+#  4. Training Metrics Persistence
+# ===========================================================================
+
+_METRICS_KEYS = (
+    "episode_rewards",
+    "episode_durations",
+    "segment_times",
+    "completion_rates",
+)
+
+
+def load_training_metrics(
+    path: str = TRAINING_METRICS_JSON_PATH,
+) -> dict:
+    """Load prior training metrics from JSON for continual runs."""
+    empty = {key: [] for key in _METRICS_KEYS}
+    if not os.path.isfile(path):
+        return empty
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Could not load training metrics from %s: %s", path, e)
+        return empty
+
+    metrics = {}
+    for key in _METRICS_KEYS:
+        value = data.get(key, [])
+        if not isinstance(value, list):
+            logger.warning(
+                "Invalid training metrics key '%s' in %s; starting fresh for it.",
+                key,
+                path,
+            )
+            value = []
+        metrics[key] = value
+
+    total = len(metrics["episode_rewards"])
+    if total:
+        logger.info(
+            "Loaded %d prior episode(s) of training metrics from %s",
+            total,
+            path,
+        )
+    return metrics
+
+
+def save_training_metrics(
+    path: str,
+    callback: "RewardTrackingCallback",
+) -> None:
+    """Persist all tracked training metrics to JSON."""
+    payload = {
+        "episode_rewards": callback.episode_rewards,
+        "episode_durations": callback.episode_durations,
+        "segment_times": callback.segment_times,
+        "completion_rates": callback.completion_rates,
+        "metadata": {
+            "last_updated": datetime.now().isoformat(timespec="seconds"),
+            "total_episodes": len(callback.episode_rewards),
+        },
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+    except OSError as e:
+        logger.warning("Could not save training metrics to %s: %s", path, e)
+
+
+# ===========================================================================
+#  5. Reward Tracking Callback
 # ===========================================================================
 
 class RewardTrackingCallback(BaseCallback):
@@ -1960,12 +2052,25 @@ class RewardTrackingCallback(BaseCallback):
       - ``completion_rates``  — fraction of checkpoints reached (0.0–1.0)
     """
 
-    def __init__(self, verbose=0):
+    def __init__(
+        self,
+        verbose=0,
+        metrics_path: str = TRAINING_METRICS_JSON_PATH,
+        prior_metrics: Optional[dict] = None,
+    ):
         super().__init__(verbose)
-        self.episode_rewards: List[float] = []
-        self.episode_durations: List[Optional[float]] = []
-        self.segment_times: List[List[Optional[float]]] = []
-        self.completion_rates: List[float] = []
+        prior = prior_metrics or {}
+        self.episode_rewards: List[float] = list(prior.get("episode_rewards", []))
+        self.episode_durations: List[Optional[float]] = list(
+            prior.get("episode_durations", [])
+        )
+        self.segment_times: List[List[Optional[float]]] = list(
+            prior.get("segment_times", [])
+        )
+        self.completion_rates: List[float] = list(
+            prior.get("completion_rates", [])
+        )
+        self._metrics_path = metrics_path
         self._current_rewards: List[float] = []
 
     def _on_training_start(self):
@@ -2001,37 +2106,24 @@ class RewardTrackingCallback(BaseCallback):
                 self.episode_rewards.append(self._current_rewards[i])
                 self._current_rewards[i] = 0.0
 
-                # --- Collect timing / completion stats from inner env ---
-                try:
-                    inner_env = self._get_inner_env(i)
-                    # Episode duration (seconds)
-                    if inner_env._lap_complete:
-                        total_steps = (inner_env._step_count
-                                       - inner_env._episode_start_step)
-                        self.episode_durations.append(
-                            total_steps / TICKS_PER_SECOND
-                        )
-                    else:
-                        self.episode_durations.append(None)
-
-                    # Segment splits (already in seconds)
-                    self.segment_times.append(
-                        list(inner_env._segment_splits)
-                    )
-
-                    # Completion rate: how many checkpoints were reached
-                    reached = sum(
-                        1 for t in inner_env._checkpoint_times if t is not None
-                    )
-                    self.completion_rates.append(reached / NUM_CHECKPOINTS)
-
-                except Exception as e:
+                # --- Collect timing / completion stats from terminal info ---
+                infos = self.locals.get("infos", [])
+                stats = infos[i].get("episode_stats") if i < len(infos) else None
+                if stats:
+                    self.episode_durations.append(stats["duration_s"])
+                    self.segment_times.append(list(stats["segment_splits"]))
+                    self.completion_rates.append(stats["completion_rate"])
+                else:
                     logger.warning(
-                        f"Could not read stats from inner env: {e}"
+                        "Episode %d ended without episode_stats in info; "
+                        "recording empty metrics.",
+                        len(self.episode_rewards),
                     )
                     self.episode_durations.append(None)
                     self.segment_times.append([None] * NUM_CHECKPOINTS)
                     self.completion_rates.append(0.0)
+
+                save_training_metrics(self._metrics_path, self)
 
                 if self.verbose > 0:
                     ep_num = len(self.episode_rewards)
@@ -2066,7 +2158,7 @@ class RewardTrackingCallback(BaseCallback):
 
 
 # ===========================================================================
-#  5. Plotting
+#  6. Plotting
 # ===========================================================================
 
 def plot_rewards(
@@ -2361,7 +2453,7 @@ def plot_completion_rate(
 
 
 # ===========================================================================
-#  6. Training Entrypoint
+#  7. Training Entrypoint
 # ===========================================================================
 
 def train(total_timesteps: int = TOTAL_TIMESTEPS):
@@ -2414,8 +2506,13 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     # runs inside learn() before the callback's on_training_start.
     attach_model_to_envs(env, model)
 
-    # Set up reward tracking
-    reward_callback = RewardTrackingCallback(verbose=1)
+    # Set up reward tracking (load prior metrics for continual runs)
+    prior_metrics = load_training_metrics(TRAINING_METRICS_JSON_PATH)
+    reward_callback = RewardTrackingCallback(
+        verbose=1,
+        metrics_path=TRAINING_METRICS_JSON_PATH,
+        prior_metrics=prior_metrics,
+    )
 
     # NB: the HUD is toggled inside the first reset() (after the horse mount),
     # once Minecraft has actually launched. Waiting for the window here is
@@ -2434,6 +2531,7 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
         final_path = new_checkpoint_path()
         model.save(final_path)
         logger.info(f"Model saved to {final_path}.zip")
+        save_training_metrics(TRAINING_METRICS_JSON_PATH, reward_callback)
         plot_rewards(reward_callback.episode_rewards)
         plot_race_time(reward_callback.episode_durations)
         plot_segment_times(reward_callback.segment_times)
@@ -2457,13 +2555,15 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     # Plot track completion rate
     plot_completion_rate(reward_callback.completion_rates)
 
+    save_training_metrics(TRAINING_METRICS_JSON_PATH, reward_callback)
+
     # Clean up
     env.close()
     logger.info("Training complete.")
 
 
 # ===========================================================================
-#  7. Main
+#  8. Main
 # ===========================================================================
 
 if __name__ == "__main__":
