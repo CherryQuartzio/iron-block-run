@@ -102,6 +102,9 @@ public class EnvServer {
     private static final double HORSE_MAX_HEALTH = 20.0;
     private static final float HORSE_HEALTH = 20.0F;
     private static final int HORSE_VARIANT = 1029;
+    // Horizontal half-extent (blocks) for per-episode horse cleanup. Must stay
+    // bounded — a world-spanning AABB hangs the game thread (chunk-section walk).
+    private static final double HORSE_CLEANUP_RADIUS = 2048.0;
 
     private int envTickCounter = -1;
     private MissionInit missionInit;
@@ -314,38 +317,30 @@ public class EnvServer {
         String worldSrc = getSaveFile(missionInit);
         boolean reuseWorld = canReuseWorld(worldSrc);
 
+        // NOTE: never block the socket thread waiting on a game-thread task here.
+        // Once recording starts, ReplaySender parks the game thread in tick() until
+        // an action arrives, and the executor queue only drains between ticks. The
+        // skip-frame loop below feeds one action per tick, which is what advances
+        // ticks AND drains any queued reset task. This mirrors stock MineRL.
         if (reuseWorld) {
             LOGGER.info("[Persistent] Soft episode reset — reusing loaded world");
-            boolean resetOk = runOnGameThreadWithPump(() -> {
+            // Recording + integrated server stay alive across the soft reset.
+            mc.execute(() -> {
                 resetAgentForNewEpisode(missionInit);
                 PlayRecorder.getInstance().softResetEpisode();
                 ReplaySender.getInstance().clearEpisodeState();
-            }, RESET_TASK_TIMEOUT_MS);
-            if (!resetOk) {
-                LOGGER.error("[Persistent] Soft episode reset may be incomplete — agent/horse position not updated");
-            }
+            });
         } else {
             integratedServerAlive = false;
             activeWorldSource = null;
             lanPublished = false;
-            // Fire-and-forget like stock MineRL: the game thread loads the world
-            // and PlayRecorder starts recording naturally during its tick loop.
-            // Do NOT block the game thread here — once recording starts ReplaySender
-            // blocks the game thread, so any queued task before that would deadlock.
             mc.execute(() -> loadOrCreateWorld(missionInit, final_seed));
             activeWorldSource = worldSrc;
-        }
-
-        waitForRecording();
-
-        if (!reuseWorld) {
-            // Recording is active and ReplaySender is in EXEC_CMD — pump actions
-            // while waiting so the game thread can finish reset before skip frames.
-            boolean resetOk = runOnGameThreadWithPump(
-                    () -> resetAgentForNewEpisode(missionInit), RESET_TASK_TIMEOUT_MS);
-            if (!resetOk) {
-                LOGGER.error("[Persistent] Initial agent reset timed out — spawn position may be wrong");
-            }
+            // World is loading with ReplaySender OFF, so the game thread ticks
+            // freely and PlayRecorder starts recording on its own. Plain poll —
+            // no pumping needed (and pumping is a no-op while mode == OFF).
+            waitForRecording();
+            mc.execute(() -> resetAgentForNewEpisode(missionInit));
         }
 
         integratedServerAlive = true;
@@ -1356,11 +1351,21 @@ public class EnvServer {
             return;
         }
         ServerWorld serverWorld = server.getWorld(World.OVERWORLD);
-        AxisAlignedBB worldBounds = new AxisAlignedBB(-3.0E7, -64, -3.0E7, 3.0E7, 320, 3.0E7);
-        List<HorseEntity> horses = serverWorld.getEntitiesWithinAABB(EntityType.HORSE, worldBounds, e -> true);
+        // IMPORTANT: do NOT pass a world-spanning AABB here. getEntitiesWithinAABB
+        // iterates chunk sections across the whole box footprint, so a +/-3e7 box
+        // makes the game thread walk billions of empty sections and hang forever.
+        // The race track + spawned horses live near the agent start, so bound the
+        // search to a generous region centered on the player.
+        double cx = mc.player.getPosX();
+        double cz = mc.player.getPosZ();
+        double radius = HORSE_CLEANUP_RADIUS;
+        AxisAlignedBB bounds = new AxisAlignedBB(
+                cx - radius, -64, cz - radius,
+                cx + radius, 320, cz + radius);
+        List<HorseEntity> horses = serverWorld.getEntitiesWithinAABB(EntityType.HORSE, bounds, e -> true);
         for (HorseEntity horse : horses) {
             horse.remove();
         }
-        LOGGER.info("[Persistent] Removed {} horse(s) from world", horses.size());
+        LOGGER.info("[Persistent] Removed {} horse(s) within {} blocks of agent", horses.size(), radius);
     }
 }
