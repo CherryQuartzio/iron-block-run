@@ -79,20 +79,7 @@ SPAWN_YAW = 180.0    # Facing -Z (toward the race track start)
 HORSE_DISTANCE = 3
 # Max env steps (ticks) spent walking up to and mounting the horse. Each tick
 # is ~0.22 blocks of walking, so this must comfortably exceed HORSE_DISTANCE.
-#
-# It must ALSO outlast the server-side teleport-confirmation hold at episode
-# start: the soft reset teleports the agent via ServerPlayNetHandler
-# .setPlayerLocation(), which sets targetPos and makes the server IGNORE all
-# client movement packets until the client returns a CConfirmTeleport. On a
-# slow client (cold chunk load / render at episode start) that confirmation can
-# take ~30+ ticks, during which 'forward' does nothing. If the budget expires
-# inside that hold the agent never reaches the horse, the mount is detected too
-# late (after this loop gives up), and the camera-leveling below is skipped —
-# leaving the policy with a pitched-down view that veers off track. A generous
-# budget lets us keep driving forward+use through the hold and still mount (and
-# level the camera) once movement is accepted. The loop breaks as soon as the
-# mount registers, so fast environments pay no extra cost.
-MOUNT_MAX_STEPS = 90
+MOUNT_MAX_STEPS = 25
 
 # Degrees to pitch the camera down before mounting. At pitch 0 the interaction
 # ray points at the horizon and sails over the horse; looking down aims it at
@@ -2595,6 +2582,7 @@ def evaluate(
         save_plots_prefix: Prefix for saved plot files (to avoid overwriting training plots).
     """
     import random as _random
+    import time as _time
 
     # Seed stdlib and numpy to reduce nondeterminism (env still may be non-deterministic)
     if deterministic:
@@ -2652,11 +2640,17 @@ def evaluate(
     ep_reward_accum = 0.0
     # track per-episode step counter (vec env returns arrays)
     ep_step_counts = [0]
+    ep_step_times: list[float] = []
+    all_step_times: list[float] = []
 
     while episodes_run < total_episodes:
         # Predict deterministically
         action, _ = model.predict(obs, deterministic=deterministic)
+        step_t0 = _time.perf_counter()
         obs, rewards, dones, infos = eval_env.step(action)
+        step_dt = _time.perf_counter() - step_t0
+        ep_step_times.append(step_dt)
+        all_step_times.append(step_dt)
 
         # rewards/dones may be array-like (vec batch)
         r = float(np.array(rewards).ravel()[0])
@@ -2683,17 +2677,21 @@ def evaluate(
                 segment_times.append([None] * NUM_CHECKPOINTS)
                 completion_rates.append(0.0)
 
+            mean_step_s = float(np.mean(ep_step_times)) if ep_step_times else 0.0
+            env_fps = (1.0 / mean_step_s) if mean_step_s > 0 else 0.0
             logger.info(
-                "Eval Episode %d: Reward=%.2f Duration=%s Completion=%.0f%%",
+                "Eval Episode %d: Reward=%.2f Duration=%s Completion=%.0f%% env_fps=%.1f",
                 episodes_run,
                 episode_rewards[-1],
                 f"{episode_durations[-1]:.1f}s" if episode_durations[-1] is not None else "DNF",
                 completion_rates[-1] * 100.0,
+                env_fps,
             )
 
             # Reset accumulators for next episode
             ep_reward_accum = 0.0
             ep_step_counts[0] = 0
+            ep_step_times = []
             # Reset the environment to start next episode
             obs = eval_env.reset()
 
@@ -2716,6 +2714,14 @@ def evaluate(
                     float(np.max(episode_rewards)))
     if completion_rates:
         logger.info("Completion rate: mean=%.1f%%", float(np.mean(completion_rates) * 100.0))
+    if all_step_times:
+        overall_mean_step_s = float(np.mean(all_step_times))
+        logger.info(
+            "Env throughput: mean step %.3fs (%.1f steps/s over %d policy steps)",
+            overall_mean_step_s,
+            1.0 / overall_mean_step_s if overall_mean_step_s > 0 else 0.0,
+            len(all_step_times),
+        )
 
     # Close environment
     eval_env.close()

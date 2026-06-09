@@ -1,0 +1,65 @@
+INFO:__main__:Ground Block Detected: grass_path
+100.83.97.99 - - [09/Jun/2026 10:26:48] 100.83.97.99: Plain non-SSL (ws://) WebSocket connection
+100.83.97.99 - - [09/Jun/2026 10:26:48] 100.83.97.99: Path: '/websockify'
+100.83.97.99 - - [09/Jun/2026 10:26:48] connecting to: localhost:5900
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:>>> Checkpoint CP_A crossed! (+50.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Agent is on gold block. (+2.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:>>> Checkpoint CP_B crossed! (+50.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: soul_sand
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:>>> Checkpoint CP_C crossed! (+50.0)
+INFO:__main__:Agent is entering bridge. (+2.5)
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: cave_air
+INFO:__main__:>>> Checkpoint CP_D crossed! (+50.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Agent is in cobweb. (-4.0)
+INFO:__main__:Agent has escaped cobweb.
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Agent is in cobweb. (-4.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Agent has escaped cobweb.
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:>>> Checkpoint CP_E crossed! (+50.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: water
+INFO:__main__:Agent has entered water. (-6.0)
+INFO:__main__:Agent has escaped water. (+2.5)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: soul_sand
+INFO:__main__:Ground Block Detected: grass
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Agent is on gold block. (+2.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:>>> LAP COMPLETE! (+300.0). Completed in 2024 steps.
+-----------------------------
+| time/              |      |
+|    fps             | 10   |
+|    iterations      | 1    |
+|    time_elapsed    | 193  |
+|    total_timesteps | 2048 |
+-----------------------------

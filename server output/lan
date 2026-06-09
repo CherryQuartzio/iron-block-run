@@ -1,0 +1,232 @@
+INFO:minerl.env._multiagent:Attempting to quit: Malmo[None:ade6f6, proc=52, addr=localhost:9664, locked=True]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:14] [EnvServerSocketHandler/WARN]: [Persistent] Hard quit — soft reset unavailable (alive=false world=null)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:17] [Render thread/WARN]: Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:17] [Render thread/WARN]: Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:17] [Render thread/WARN]: Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:17] [Render thread/WARN]: Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:17] [Render thread/WARN]: Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 0 did not advance tick (stuck at 1)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 1 did not advance tick (stuck at 2)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 2 did not advance tick (stuck at 3)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 3 did not advance tick (stuck at 4)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 4 did not advance tick (stuck at 5)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 5 did not advance tick (stuck at 6)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 6 did not advance tick (stuck at 7)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:26] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 7 did not advance tick (stuck at 8)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 8 did not advance tick (stuck at 9)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 9 did not advance tick (stuck at 10)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 10 did not advance tick (stuck at 11)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 11 did not advance tick (stuck at 12)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 12 did not advance tick (stuck at 13)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 13 did not advance tick (stuck at 14)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 14 did not advance tick (stuck at 15)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 15 did not advance tick (stuck at 16)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 16 did not advance tick (stuck at 17)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 17 did not advance tick (stuck at 18)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 18 did not advance tick (stuck at 19)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:35:27] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 19 did not advance tick (stuck at 20)
+INFO:__main__:Step     0 | Pos: X= -72.50 Y= 71.79 Z=-152.11 | Yaw= 180.0° Pitch=   0.0°
+172.18.0.1 - - [09/Jun/2026 10:35:39] 172.18.0.1: Plain non-SSL (ws://) WebSocket connection
+172.18.0.1 - - [09/Jun/2026 10:35:39] 172.18.0.1: Path: '/websockify'
+172.18.0.1 - - [09/Jun/2026 10:35:39] connecting to: localhost:5900
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:>>> FAR OFF COURSE (perp 10.4 > 4.4+6). Ending episode.
+INFO:minerl.env._multiagent:Attempting to quit: Malmo[None:ade6f6, proc=52, addr=localhost:9664, locked=True]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:13] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 0 did not advance tick (stuck at 1)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:13] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 1 did not advance tick (stuck at 2)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 2 did not advance tick (stuck at 3)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 3 did not advance tick (stuck at 4)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 4 did not advance tick (stuck at 5)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 5 did not advance tick (stuck at 6)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 6 did not advance tick (stuck at 7)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 7 did not advance tick (stuck at 8)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 8 did not advance tick (stuck at 9)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 9 did not advance tick (stuck at 10)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 10 did not advance tick (stuck at 11)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 11 did not advance tick (stuck at 12)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:14] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 12 did not advance tick (stuck at 13)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:15] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 13 did not advance tick (stuck at 14)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:15] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 14 did not advance tick (stuck at 15)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:15] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 15 did not advance tick (stuck at 16)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:15] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 16 did not advance tick (stuck at 17)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:15] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 17 did not advance tick (stuck at 18)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:15] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 18 did not advance tick (stuck at 19)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:15] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 19 did not advance tick (stuck at 20)
+INFO:__main__:Step     0 | Pos: X= -72.50 Y= 71.79 Z=-153.17 | Yaw= 180.0° Pitch=   0.0°
+INFO:__main__:Eval Episode 1: Reward=-19.00 Duration=DNF Completion=0%
+INFO:minerl.env._multiagent:Attempting to quit: Malmo[None:ade6f6, proc=52, addr=localhost:9664, locked=True]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 0 did not advance tick (stuck at 0)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 1 did not advance tick (stuck at 1)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 2 did not advance tick (stuck at 2)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 3 did not advance tick (stuck at 3)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 4 did not advance tick (stuck at 4)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 5 did not advance tick (stuck at 5)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 6 did not advance tick (stuck at 6)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 7 did not advance tick (stuck at 7)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 8 did not advance tick (stuck at 8)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:23] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 9 did not advance tick (stuck at 9)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 10 did not advance tick (stuck at 10)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 11 did not advance tick (stuck at 11)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 12 did not advance tick (stuck at 12)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 13 did not advance tick (stuck at 13)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 14 did not advance tick (stuck at 14)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 15 did not advance tick (stuck at 15)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 16 did not advance tick (stuck at 16)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 17 did not advance tick (stuck at 17)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 18 did not advance tick (stuck at 18)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:36:24] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 19 did not advance tick (stuck at 19)
+INFO:__main__:Step     0 | Pos: X= -72.50 Y= 71.79 Z=-151.91 | Yaw= 180.0° Pitch=   0.0°
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:>>> Checkpoint CP_A crossed! (+50.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Agent is on gold block. (+2.0)
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:>>> FAR OFF COURSE (perp 11.1 > 5.0+6). Ending episode.
+INFO:minerl.env._multiagent:Attempting to quit: Malmo[None:ade6f6, proc=52, addr=localhost:9664, locked=True]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:39] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 0 did not advance tick (stuck at 0)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:39] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 1 did not advance tick (stuck at 1)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:39] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 2 did not advance tick (stuck at 2)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:39] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 3 did not advance tick (stuck at 3)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:39] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 4 did not advance tick (stuck at 4)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:39] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 5 did not advance tick (stuck at 5)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:39] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 6 did not advance tick (stuck at 6)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 7 did not advance tick (stuck at 7)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 8 did not advance tick (stuck at 8)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 9 did not advance tick (stuck at 9)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 10 did not advance tick (stuck at 10)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 11 did not advance tick (stuck at 11)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 12 did not advance tick (stuck at 12)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 13 did not advance tick (stuck at 13)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 14 did not advance tick (stuck at 14)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 15 did not advance tick (stuck at 15)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 16 did not advance tick (stuck at 16)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 17 did not advance tick (stuck at 17)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 18 did not advance tick (stuck at 18)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:40] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 19 did not advance tick (stuck at 19)
+INFO:__main__:Step     0 | Pos: X= -72.50 Y= 71.79 Z=-151.55 | Yaw= 180.0° Pitch=   0.0°
+INFO:__main__:Eval Episode 2: Reward=64.94 Duration=DNF Completion=17%
+INFO:minerl.env._multiagent:Attempting to quit: Malmo[None:ade6f6, proc=52, addr=localhost:9664, locked=True]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 0 did not advance tick (stuck at 0)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 1 did not advance tick (stuck at 1)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 2 did not advance tick (stuck at 2)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 3 did not advance tick (stuck at 3)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 4 did not advance tick (stuck at 4)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 5 did not advance tick (stuck at 5)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 6 did not advance tick (stuck at 6)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:48] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 7 did not advance tick (stuck at 7)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 8 did not advance tick (stuck at 8)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 9 did not advance tick (stuck at 9)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 10 did not advance tick (stuck at 10)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 11 did not advance tick (stuck at 11)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 12 did not advance tick (stuck at 12)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 13 did not advance tick (stuck at 13)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 14 did not advance tick (stuck at 14)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 15 did not advance tick (stuck at 15)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 16 did not advance tick (stuck at 16)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 17 did not advance tick (stuck at 17)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 18 did not advance tick (stuck at 18)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:37:49] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 19 did not advance tick (stuck at 19)
+INFO:__main__:Step     0 | Pos: X= -72.50 Y= 71.79 Z=-151.91 | Yaw= 180.0° Pitch=   0.0°
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: grass_path
+INFO:__main__:Ground Block Detected: air
+INFO:__main__:Ground Block Detected: grass_block
+INFO:__main__:>>> FAR OFF COURSE (perp 10.5 > 4.5+6). Ending episode.
+INFO:minerl.env._multiagent:Attempting to quit: Malmo[None:ade6f6, proc=52, addr=localhost:9664, locked=True]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:37] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 0 did not advance tick (stuck at 0)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:37] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 1 did not advance tick (stuck at 1)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:37] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 2 did not advance tick (stuck at 2)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:37] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 3 did not advance tick (stuck at 3)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:37] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 4 did not advance tick (stuck at 4)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:37] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 5 did not advance tick (stuck at 5)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 6 did not advance tick (stuck at 6)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 7 did not advance tick (stuck at 7)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 8 did not advance tick (stuck at 8)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 9 did not advance tick (stuck at 9)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 10 did not advance tick (stuck at 10)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 11 did not advance tick (stuck at 11)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 12 did not advance tick (stuck at 12)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 13 did not advance tick (stuck at 13)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 14 did not advance tick (stuck at 14)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 15 did not advance tick (stuck at 15)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 16 did not advance tick (stuck at 16)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 17 did not advance tick (stuck at 17)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 18 did not advance tick (stuck at 18)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:38] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 19 did not advance tick (stuck at 19)
+INFO:__main__:Step     0 | Pos: X= -72.50 Y= 71.79 Z=-151.91 | Yaw= 180.0° Pitch=   0.0°
+INFO:__main__:Eval Episode 3: Reward=-13.43 Duration=DNF Completion=0%
+INFO:minerl.env._multiagent:Attempting to quit: Malmo[None:ade6f6, proc=52, addr=localhost:9664, locked=True]
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 0 did not advance tick (stuck at 0)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 1 did not advance tick (stuck at 1)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 2 did not advance tick (stuck at 2)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 3 did not advance tick (stuck at 3)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 4 did not advance tick (stuck at 4)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 5 did not advance tick (stuck at 5)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 6 did not advance tick (stuck at 6)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 7 did not advance tick (stuck at 7)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 8 did not advance tick (stuck at 8)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:46] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 9 did not advance tick (stuck at 9)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 10 did not advance tick (stuck at 10)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 11 did not advance tick (stuck at 11)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 12 did not advance tick (stuck at 12)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 13 did not advance tick (stuck at 13)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 14 did not advance tick (stuck at 14)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 15 did not advance tick (stuck at 15)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 16 did not advance tick (stuck at 16)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 17 did not advance tick (stuck at 17)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 18 did not advance tick (stuck at 18)
+WARNING:minerl.env.malmo.instance.ade6f6:[10:38:47] [EnvServerSocketHandler/WARN]: [Persistent] Skip frame 19 did not advance tick (stuck at 19)
+INFO:__main__:Step     0 | Pos: X= -72.50 Y= 71.79 Z=-151.91 | Yaw= 180.0° Pitch=   0.0°
+INFO:__main__:Reward plot saved to eval_training_rewards.png
+INFO:__main__:Race time plot saved to eval_training_race_time.png
+INFO:__main__:Segment times plot saved to eval_training_segment_times.png
+INFO:__main__:Completion rate plot saved to eval_training_completion_rate.png
+INFO:__main__:Evaluation complete: 3 episodes
+INFO:__main__:Reward: mean=10.83  median=-13.43  min=-19.00  max=64.94
+INFO:__main__:Completion rate: mean=5.6%
+ERROR:minerl.env.malmo:Attempted to send kill command to minecraft process and failed with exception timed out
+INFO:process_watcher:About to reap process tree of 52:launchClient.sh:/usr/bin/bash i sleeping, owner 39, printing process tree status in termination order:
+INFO:process_watcher:   -56:java:/opt/conda/bin/java i sleeping, owner 52
+INFO:process_watcher:   -52:launchClient.sh:/usr/bin/bash i sleeping, owner 39
+INFO:process_watcher:Trying to SIGTERM 56:java:/opt/conda/bin/java i sleeping, owner 52
+INFO:process_watcher:Process psutil.Process(pid=56, name='java', status='terminated', started='10:34:55') terminated with exit code None
+INFO:process_watcher:Trying to SIGTERM 52:launchClient.sh:/usr/bin/bash i zombie, owner 39
+INFO:process_watcher:Process psutil.Popen(pid=52, name='launchClient.sh', status='terminated', exitcode=0) terminated with exit code 0
+(base) root@5e5d57df5170:/workspace# caught XIO error:

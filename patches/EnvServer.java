@@ -352,10 +352,11 @@ public class EnvServer {
         pumpReplaySender();
         int skipFrames = DEFAULT_SKIP_FIRST_FRAMES;
         for (int i = 0; i < skipFrames; i++) {
+            int tickBefore = pr.getTickCounter();
             execActions("camera 0 0.0", 0);
             waitForNextObservation();
-            if (envTickCounter == pr.getTickCounter()) {
-                LOGGER.warn("[Persistent] Skip frame {} did not advance tick (stuck at {})", i, envTickCounter);
+            if (tickBefore == pr.getTickCounter()) {
+                LOGGER.warn("[Persistent] Skip frame {} did not advance tick (stuck at {})", i, tickBefore);
                 pumpReplaySender();
             }
         }
@@ -411,13 +412,11 @@ public class EnvServer {
         Minecraft mc = Minecraft.getInstance();
         IntegratedServer integratedServer = mc.getIntegratedServer();
         if (integratedServer != null) {
-            // The authoritative teleport MUST run on the server thread. Calling
-            // connection.setPlayerLocation() from the client/Render thread races
-            // with ServerPlayNetHandler.processPlayer() (teleportId/targetPos
-            // confirmation handshake); the race intermittently drops the pending
-            // teleport, so the server reverts the agent to its old position while
-            // the (server-authoritative) horse still resets. Serializing on the
-            // server thread eliminates the race.
+            // Authoritative teleport on the server thread. Use setLocationAndAngles
+            // directly — NOT connection.setPlayerLocation(), which sets targetPos
+            // and makes ServerPlayNetHandler ignore client movement until
+            // CConfirmTeleport, breaking the scripted mount and shifting the
+            // policy start pose down-track.
             integratedServer.execute(() -> {
                 ServerPlayerEntity serverPlayer =
                         integratedServer.getPlayerList().getPlayerByUUID(player.getUniqueID());
@@ -431,14 +430,15 @@ public class EnvServer {
                     // Must dismount on the SERVER side first. The client-side
                     // stopRiding() earlier doesn't detach the authoritative server
                     // player, so while it's still a passenger its position is bound
-                    // to the horse and setPlayerLocation() gets dragged back to the
-                    // vehicle — which is why teleport only failed while mounted.
+                    // to the horse and the teleport gets dragged back to the vehicle.
                     if (serverPlayer.isPassenger()) {
                         serverPlayer.stopRiding();
                     }
                     serverPlayer.setMotion(0, 0, 0);
                     serverPlayer.fallDistance = 0;
-                    serverPlayer.connection.setPlayerLocation(x, y, z, yaw, pitch);
+                    serverPlayer.setLocationAndAngles(x, y, z, yaw, pitch);
+                    serverPlayer.rotationYaw = yaw;
+                    serverPlayer.rotationPitch = pitch;
                     LOGGER.info("[Persistent] Agent reset to ({}, {}, {})", x, y, z);
                 } else {
                     LOGGER.warn("[Persistent] Agent teleport skipped — no server player found");
@@ -449,14 +449,35 @@ public class EnvServer {
         }
     }
 
-    // Clears NoAI on the horse the agent has just mounted. The horse is spawned
-    // with NoAI enabled so it holds position before the mount; once mounted we
-    // must restore AI so its server-side movement (LivingEntity.travel) matches
-    // main, where the horse is never NoAI. Runs on the integrated-server thread
-    // so the authoritative flag flips and syncs back to the client.
-    private void clearRiddenHorseNoAi(Minecraft mc) {
+    // Snap the mounted agent and horse to the mission start pose so policy
+    // gameplay begins at the same world position as main-branch training.
+    // The mount walk can end near the horse spawn (a few blocks down-track);
+    // normalizing here keeps Step 0 aligned with the trained trajectory.
+    private void normalizeMountedStartPose(Minecraft mc) {
+        if (missionInit == null || mc.player == null) {
+            return;
+        }
+        PosAndDirection startPos = getAgentStart(missionInit).getPlacement();
+        if (startPos == null) {
+            return;
+        }
+        double x = startPos.getX();
+        double y = startPos.getY();
+        double z = startPos.getZ();
+        float yaw = startPos.getYaw();
+        float pitch = startPos.getPitch();
+
+        Entity clientVehicle = mc.player.getRidingEntity();
+        if (clientVehicle != null) {
+            clientVehicle.setLocationAndAngles(x, y, z, yaw, 0);
+            clientVehicle.setMotion(0, 0, 0);
+            clientVehicle.fallDistance = 0;
+        }
+        mc.player.rotationYaw = yaw;
+        mc.player.rotationPitch = pitch;
+
         IntegratedServer integratedServer = mc.getIntegratedServer();
-        if (integratedServer == null || mc.player == null) {
+        if (integratedServer == null) {
             return;
         }
         final java.util.UUID playerId = mc.player.getUniqueID();
@@ -473,13 +494,16 @@ public class EnvServer {
                 return;
             }
             Entity vehicle = serverPlayer.getRidingEntity();
-            if (vehicle instanceof AbstractHorseEntity) {
-                AbstractHorseEntity horse = (AbstractHorseEntity) vehicle;
-                if (horse.isAIDisabled()) {
-                    horse.setNoAI(false);
-                    LOGGER.info("[HorseAI] Restored AI on mounted horse (NoAI cleared)");
-                }
+            if (!(vehicle instanceof AbstractHorseEntity)) {
+                return;
             }
+            AbstractHorseEntity horse = (AbstractHorseEntity) vehicle;
+            horse.setLocationAndAngles(x, y, z, yaw, 0);
+            horse.setMotion(0, 0, 0);
+            horse.fallDistance = 0;
+            serverPlayer.rotationYaw = yaw;
+            serverPlayer.rotationPitch = pitch;
+            LOGGER.info("[Persistent] Normalized mounted start to ({}, {}, {})", x, y, z);
         });
     }
 
@@ -643,11 +667,6 @@ public class EnvServer {
         horse.getAttribute(Attributes.HORSE_JUMP_STRENGTH).setBaseValue(HORSE_JUMP_STRENGTH);
         horse.getAttribute(Attributes.MAX_HEALTH).setBaseValue(HORSE_MAX_HEALTH);
         horse.setHealth(HORSE_HEALTH);
-
-        // Disable AI so the horse stays put until the agent mounts it; otherwise
-        // it can wander off before the mount sequence completes. Riding still works
-        // because the rider drives movement directly, not the horse's own AI.
-        horse.setNoAI(true);
         horse.setMotion(0, 0, 0);
     }
 
@@ -872,14 +891,10 @@ public class EnvServer {
                 LOGGER.warn("[Dismount] player left the horse at tick {} (alive={})",
                     PlayRecorder.getInstance().getTickCounter(), mc.player.isAlive());
             }
-            // On the mount transition, restore the horse's AI server-side. The
-            // horse spawns with NoAI so it stays put before the agent reaches it,
-            // but a NoAI horse reports isServerWorld()==false, which changes the
-            // mounted LivingEntity.travel() motion path and makes the main-trained
-            // policy veer off track. Clearing NoAI the moment the agent mounts
-            // restores main's mounted physics exactly.
+            // On mount, snap agent+horse to the mission start pose so policy
+            // begins at the same track position as main-branch training.
             if (riding && !wasRiding) {
-                clearRiddenHorseNoAi(mc);
+                normalizeMountedStartPose(mc);
             }
             wasRiding = riding;
         }
