@@ -403,24 +403,42 @@ public class EnvServer {
         player.setMotion(0, 0, 0);
         player.fallDistance = 0;
 
-        Minecraft mc = Minecraft.getInstance();
-        IntegratedServer integratedServer = mc.getIntegratedServer();
-        if (integratedServer != null) {
-            ServerPlayerEntity serverPlayer = integratedServer.getPlayerList().getPlayerByUUID(player.getUniqueID());
-            if (serverPlayer != null) {
-                serverPlayer.setMotion(0, 0, 0);
-                serverPlayer.fallDistance = 0;
-                serverPlayer.setLocationAndAngles(x, y, z, yaw, pitch);
-                serverPlayer.setPositionAndUpdate(x, y, z);
-                serverPlayer.connection.setPlayerLocation(x, y, z, yaw, pitch);
-            }
-        }
-
+        // Client-side set for an immediate local view update.
         player.setLocationAndAngles(x, y, z, yaw, pitch);
         player.rotationYaw = yaw;
         player.rotationPitch = pitch;
 
-        LOGGER.info("[Persistent] Agent reset to ({}, {}, {})", x, y, z);
+        Minecraft mc = Minecraft.getInstance();
+        IntegratedServer integratedServer = mc.getIntegratedServer();
+        if (integratedServer != null) {
+            // The authoritative teleport MUST run on the server thread. Calling
+            // connection.setPlayerLocation() from the client/Render thread races
+            // with ServerPlayNetHandler.processPlayer() (teleportId/targetPos
+            // confirmation handshake); the race intermittently drops the pending
+            // teleport, so the server reverts the agent to its old position while
+            // the (server-authoritative) horse still resets. Serializing on the
+            // server thread eliminates the race.
+            integratedServer.execute(() -> {
+                ServerPlayerEntity serverPlayer =
+                        integratedServer.getPlayerList().getPlayerByUUID(player.getUniqueID());
+                if (serverPlayer == null) {
+                    List<ServerPlayerEntity> players = integratedServer.getPlayerList().getPlayers();
+                    if (!players.isEmpty()) {
+                        serverPlayer = players.get(0);
+                    }
+                }
+                if (serverPlayer != null) {
+                    serverPlayer.setMotion(0, 0, 0);
+                    serverPlayer.fallDistance = 0;
+                    serverPlayer.connection.setPlayerLocation(x, y, z, yaw, pitch);
+                    LOGGER.info("[Persistent] Agent reset to ({}, {}, {})", x, y, z);
+                } else {
+                    LOGGER.warn("[Persistent] Agent teleport skipped — no server player found");
+                }
+            });
+        } else {
+            LOGGER.info("[Persistent] Agent reset (client only) to ({}, {}, {})", x, y, z);
+        }
     }
 
     private void enforceAgentGameMode(MissionInit missionInit) {
