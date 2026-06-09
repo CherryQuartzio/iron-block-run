@@ -91,6 +91,9 @@ public class EnvServer {
     private static final long GAME_THREAD_TASK_TIMEOUT_MS = 10000L;
     private static final long RECORDING_WAIT_TIMEOUT_MS = 30000L;
     private static final long MAIN_MENU_WAIT_TIMEOUT_MS = 30000L;
+    private static final long WORLD_READY_TIMEOUT_MS = 60000L;
+    private static final long WORLD_LOAD_TIMEOUT_MS = 120000L;
+    private static final long OBSERVATION_WAIT_TIMEOUT_MS = 30000L;
 
     // Race horse stats (formerly DrawEntity NBTData in agent mission XML).
     private static final double HORSE_MOVEMENT_SPEED = 0.2;
@@ -324,8 +327,13 @@ public class EnvServer {
             integratedServerAlive = false;
             activeWorldSource = null;
             lanPublished = false;
-            mc.execute(() -> loadOrCreateWorld(missionInit, final_seed));
+            boolean loadOk = runOnGameThreadWithPump(
+                    () -> loadOrCreateWorld(missionInit, final_seed), WORLD_LOAD_TIMEOUT_MS);
             activeWorldSource = worldSrc;
+            if (!loadOk) {
+                LOGGER.error("[Persistent] World load timed out — mission init may hang");
+            }
+            waitForPlayerReady();
         }
 
         waitForRecording();
@@ -333,7 +341,10 @@ public class EnvServer {
 
         maybeOpenToLan();
         if (!reuseWorld) {
-            mc.execute(() -> resetAgentForNewEpisode(missionInit));
+            boolean resetOk = runOnGameThreadWithPump(() -> resetAgentForNewEpisode(missionInit));
+            if (!resetOk) {
+                LOGGER.error("[Persistent] Initial agent reset timed out — spawn position may be wrong");
+            }
         }
 
         envTickCounter = PlayRecorder.getInstance().getTickCounter();
@@ -741,11 +752,23 @@ public class EnvServer {
         // ideally, instead addAction returns a future on next observation (gym-style)
         // these futures are then resolved by ReplaySender or similar entity
         PlayRecorder pr = PlayRecorder.getInstance();
+        long deadline = System.currentTimeMillis() + OBSERVATION_WAIT_TIMEOUT_MS;
 
         try {
-            synchronized (pr) {
-                while (envTickCounter == pr.getTickCounter()) {
-                    pr.wait();
+            while (envTickCounter == pr.getTickCounter()) {
+                if (System.currentTimeMillis() >= deadline) {
+                    LOGGER.error(
+                            "[Persistent] Timed out waiting for observation (stuck at tick {})",
+                            envTickCounter);
+                    envTickCounter = pr.getTickCounter();
+                    return;
+                }
+                pumpReplaySender();
+                synchronized (pr) {
+                    if (envTickCounter != pr.getTickCounter()) {
+                        break;
+                    }
+                    pr.wait(50);
                 }
             }
         } catch (InterruptedException e) {
@@ -1071,6 +1094,10 @@ public class EnvServer {
     }
 
     private boolean runOnGameThreadWithPump(Runnable task) throws InterruptedException {
+        return runOnGameThreadWithPump(task, GAME_THREAD_TASK_TIMEOUT_MS);
+    }
+
+    private boolean runOnGameThreadWithPump(Runnable task, long timeoutMs) throws InterruptedException {
         Minecraft mc = Minecraft.getInstance();
         CountDownLatch latch = new CountDownLatch(1);
         mc.execute(() -> {
@@ -1080,13 +1107,13 @@ public class EnvServer {
                 latch.countDown();
             }
         });
-        long deadline = System.currentTimeMillis() + GAME_THREAD_TASK_TIMEOUT_MS;
+        long deadline = System.currentTimeMillis() + timeoutMs;
         while (latch.getCount() > 0 && System.currentTimeMillis() < deadline) {
             pumpReplaySender();
             latch.await(10, TimeUnit.MILLISECONDS);
         }
         if (latch.getCount() > 0) {
-            LOGGER.error("[Persistent] Game-thread reset task timed out — agent/horse may not have been repositioned");
+            LOGGER.error("[Persistent] Game-thread task timed out after {}ms", timeoutMs);
             return false;
         }
         return true;
@@ -1124,6 +1151,29 @@ public class EnvServer {
                 isPersistentServerEnabled(), isLanEnabled(), getLanPort());
     }
 
+    private void waitForPlayerReady() throws InterruptedException {
+        long deadline = System.currentTimeMillis() + WORLD_READY_TIMEOUT_MS;
+        int pumps = 0;
+        while (System.currentTimeMillis() < deadline) {
+            if (pumps++ % 5 == 0) {
+                pumpReplaySender();
+            }
+            if (pumps % 10 == 0 && runOnGameThread(() -> {
+                Minecraft mc = Minecraft.getInstance();
+                return mc.world != null && mc.player != null && mc.getIntegratedServer() != null;
+            })) {
+                LOGGER.info("[Persistent] World and player ready");
+                return;
+            }
+            if (pumps % 200 == 0) {
+                LOGGER.info("[Persistent] Waiting for world/player to be ready...");
+            }
+            Thread.sleep(10);
+        }
+        LOGGER.error("[Persistent] Timed out waiting for world/player to be ready");
+        throw new InterruptedException("World/player not ready");
+    }
+
     private void waitForRecording() throws InterruptedException {
         PlayRecorder pr = PlayRecorder.getInstance();
         if (pr.isRecording()) {
@@ -1140,9 +1190,16 @@ public class EnvServer {
             if (System.currentTimeMillis() >= deadline) {
                 LOGGER.warn("[Persistent] PlayRecorder slow to start; forcing on game thread");
                 forceStartRecording(pr);
-                return;
+                break;
+            }
+            if (pumps % 200 == 0) {
+                LOGGER.info("[Persistent] Waiting for PlayRecorder to start...");
             }
             Thread.sleep(10);
+        }
+        if (!pr.isRecording()) {
+            LOGGER.error("[Persistent] PlayRecorder failed to start — cannot complete mission init");
+            throw new InterruptedException("PlayRecorder not recording");
         }
     }
 
@@ -1167,7 +1224,12 @@ public class EnvServer {
                 latch.countDown();
             }
         });
-        if (!latch.await(15, TimeUnit.SECONDS)) {
+        long deadline = System.currentTimeMillis() + 15000;
+        while (latch.getCount() > 0 && System.currentTimeMillis() < deadline) {
+            pumpReplaySender();
+            latch.await(10, TimeUnit.MILLISECONDS);
+        }
+        if (latch.getCount() > 0) {
             LOGGER.error("[Persistent] Timed out forcing PlayRecorder start on game thread");
         }
         if (!pr.isRecording()) {
