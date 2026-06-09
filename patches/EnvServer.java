@@ -328,26 +328,23 @@ public class EnvServer {
             integratedServerAlive = false;
             activeWorldSource = null;
             lanPublished = false;
-            boolean loadOk = runOnGameThreadWithPump(
-                    () -> loadOrCreateWorld(missionInit, final_seed), WORLD_LOAD_TIMEOUT_MS);
+            // Fire-and-forget like stock MineRL: the game thread loads the world
+            // and PlayRecorder starts recording naturally during its tick loop.
+            // Do NOT block the game thread here — once recording starts ReplaySender
+            // blocks the game thread, so any queued task before that would deadlock.
+            mc.execute(() -> loadOrCreateWorld(missionInit, final_seed));
             activeWorldSource = worldSrc;
-            if (!loadOk) {
-                LOGGER.error("[Persistent] World load timed out — mission init may hang");
-            }
-            waitForPlayerReady();
-            // Reset before PlayRecorder/EXEC_CMD starts — otherwise ReplaySender
-            // blocks the game thread and the reset task never runs.
-            boolean resetOk = runOnGameThreadWithPump(
-                    () -> resetAgentForNewEpisode(missionInit), RESET_TASK_TIMEOUT_MS);
-            if (!resetOk) {
-                LOGGER.error("[Persistent] Initial agent reset timed out — spawn position may be wrong");
-            }
         }
 
         waitForRecording();
         integratedServerAlive = true;
 
         maybeOpenToLan();
+        if (!reuseWorld) {
+            // Recording has started and the game thread is ticking; the pumped
+            // skip-frame loop below drains this task between ReplaySender waits.
+            mc.execute(() -> resetAgentForNewEpisode(missionInit));
+        }
 
         PlayRecorder pr = PlayRecorder.getInstance();
         envTickCounter = pr.getTickCounter();
