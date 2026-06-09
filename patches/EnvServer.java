@@ -326,7 +326,7 @@ public class EnvServer {
             LOGGER.info("[Persistent] Soft episode reset — reusing loaded world");
             // Recording + integrated server stay alive across the soft reset.
             mc.execute(() -> {
-                resetAgentForNewEpisode(missionInit);
+                resetAgentForNewEpisode(missionInit, true);
                 PlayRecorder.getInstance().softResetEpisode();
                 ReplaySender.getInstance().clearEpisodeState();
             });
@@ -340,7 +340,7 @@ public class EnvServer {
             // freely and PlayRecorder starts recording on its own. Plain poll —
             // no pumping needed (and pumping is a no-op while mode == OFF).
             waitForRecording();
-            mc.execute(() -> resetAgentForNewEpisode(missionInit));
+            mc.execute(() -> resetAgentForNewEpisode(missionInit, false));
         }
 
         integratedServerAlive = true;
@@ -390,7 +390,8 @@ public class EnvServer {
         });
     }
 
-    private void setAgentPosition(ClientPlayerEntity player, MissionInit missionInit) {
+    private void setAgentPosition(ClientPlayerEntity player, MissionInit missionInit,
+            boolean serverAuthoritative) {
         PosAndDirection startPos = getAgentStart(missionInit).getPlacement();
         if (startPos == null) {
             return;
@@ -408,6 +409,11 @@ public class EnvServer {
         player.setLocationAndAngles(x, y, z, yaw, pitch);
         player.rotationYaw = yaw;
         player.rotationPitch = pitch;
+
+        if (!serverAuthoritative) {
+            LOGGER.info("[Persistent] Agent reset (client only) to ({}, {}, {})", x, y, z);
+            return;
+        }
 
         Minecraft mc = Minecraft.getInstance();
         IntegratedServer integratedServer = mc.getIntegratedServer();
@@ -1395,7 +1401,7 @@ public class EnvServer {
         });
     }
 
-    private void resetAgentForNewEpisode(MissionInit missionInit) {
+    private void resetAgentForNewEpisode(MissionInit missionInit, boolean serverAuthoritative) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
             LOGGER.warn("[Persistent] Cannot reset agent: player is null");
@@ -1414,7 +1420,7 @@ public class EnvServer {
         }
 
         setAgentInventory(mc.player, missionInit);
-        setAgentPosition(mc.player, missionInit);
+        setAgentPosition(mc.player, missionInit, serverAuthoritative);
         enforceAgentGameMode(missionInit);
         cleanupEpisodeHorses(mc);
         applyWorldDecorators(missionInit);
