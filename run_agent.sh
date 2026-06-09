@@ -5,10 +5,6 @@ set -euo pipefail
 MODE="gui"
 PYTHON_PATH="/opt/conda/bin/python"
 
-if [ ! -f "$PYTHON_PATH" ]; then
-    PYTHON_PATH="python"
-fi
-
 # Helper to print usage
 usage() {
     echo "Usage: $0 [option] [additional_args...]"

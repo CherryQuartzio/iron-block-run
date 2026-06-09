@@ -44,7 +44,7 @@ except Exception:  # pragma: no cover - optional dependency
     cv2 = None
     print("NOT USING CV2")
     _CV2_AVAILABLE = False
-VISUALIZE = True
+VISUALIZE = False
 from minerl.herobraine.env_spec import EnvSpec
 from minerl.herobraine.env_specs.human_controls import HumanControlEnvSpec
 from minerl.herobraine.hero import handlers
@@ -148,26 +148,26 @@ REWARD_CHECKPOINT = 50.0        # Crossing the next expected checkpoint
 REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
 REWARD_PROGRESS = 0.5           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
-REWARD_GOLD_BLOCK = 2.0         # Stepped on gold_block (speed boost plate)
-REWARD_SPRUCE_SLAB = 2.5        # Entering spruce_slab (bridge over water)
-PENALTY_SOUL_SAND = -0.5        # Per-step: on soul_sand
-PENALTY_WATER = -5.0            # On entry: in water
-REWARD_WATER_ESCAPE = 2.5        # On escape: out of water
-PENALTY_COBWEB = -3.0           # On entry: in cobweb
-PENALTY_OFF_COURSE = -0.3       # Per-step: on grass_block (off track)
+REWARD_GOLD_BLOCK = 0.0         # Stepped on gold_block (speed boost plate)
+REWARD_SPRUCE_SLAB = 0.0        # Entering spruce_slab (bridge over water)
+PENALTY_SOUL_SAND = -0.26        # Per-step: on soul_sand
+PENALTY_WATER = 0.0            # On entry: in water
+REWARD_WATER_ESCAPE = 0.0        # On escape: out of water
+PENALTY_COBWEB = 0.0           # On entry: in cobweb
+PENALTY_OFF_COURSE = -0.25       # Per-step: on grass_block (off track)
 PENALTY_TIME = -0.01            # Per-step: encourages speed
 PENALTY_STUCK = -50.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
 
-OPTIMIZE_SPEED = True 
+OPTIMIZE_SPEED = False
 if OPTIMIZE_SPEED: # Rewards to change if optimizing speed
     PENALTY_TIME = -0.03
     PENALTY_WATER = -6.0
     PENALTY_COBWEB = -4.0
 
 # -- Stuck / off-course detection --
-STUCK_WINDOW = 100              # Steps to check for stuck condition
+STUCK_WINDOW = 200              # Steps to check for stuck condition
 STUCK_MIN_DISPLACEMENT = 1.0    # Minimum blocks moved in STUCK_WINDOW steps
 OFF_COURSE_MARGIN = 6.0         # Terminal off-course = perp dist > local half-width + this
 
@@ -1787,6 +1787,7 @@ class HorseRaceEnv(gym.Env):
                     # Crossed start/goal → lap complete
                     reward += REWARD_LAP_COMPLETE
                     self._lap_complete = True
+                    self._force_done = True
                     self._spruce_slab_entered = False
                     logger.info(f">>> LAP COMPLETE! (+{REWARD_LAP_COMPLETE}). Completed in {self._step_count - self._lap_complete_step} steps.")
                     self._lap_complete_step = self._step_count
@@ -1824,7 +1825,7 @@ class HorseRaceEnv(gym.Env):
                     reward += PENALTY_WRONG_DIRECTION
 
         # ---- 3. Block-type rewards / penalties -------------------------
-        if self._step_count % 100 == 0: # naive cooldown for blocks to avoid spamming rewards
+        if self._step_count % 300 == 0: # naive cooldown for blocks to avoid spamming rewards
             self._gold_block_entered = False
         if self._in_water and above_block != "water":
             reward += REWARD_WATER_ESCAPE
@@ -2559,9 +2560,161 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     logger.info("Training complete.")
 
 
+def evaluate(
+        total_episodes: int = 10,
+        model_path: Optional[str] = None,
+        render: bool = False,
+        seed: int = 42,
+        save_plots_prefix: str = "eval_",
+        deterministic:bool = True
+):
+    """
+    Deterministic evaluation of the trained agent.
+
+    Mirrors the training environment creation and metrics collection but does not
+    train. Actions are selected with model.predict(..., deterministic=True).
+
+    Args:
+        total_episodes: Number of full episodes to run (complete or DNF).
+        model_path: Optional explicit path to the model zip (if None, uses resolve_load_path()).
+        render: If True, create env(s) with visualization enabled (opens CV window).
+        seed: RNG seed for numpy/python random to reduce nondeterminism.
+        save_plots_prefix: Prefix for saved plot files (to avoid overwriting training plots).
+    """
+    import random as _random
+
+    # Seed stdlib and numpy to reduce nondeterminism (env still may be non-deterministic)
+    if deterministic:
+        _random.seed(seed)
+        np.random.seed(seed)
+
+    logger.info("Preparing evaluation environment...")
+
+    # CRITICAL: Match training environment configuration exactly
+    # Training uses make_env() which passes visualize=VISUALIZE
+    # We must create envs the SAME WAY as training to ensure model sees
+    # compatible observations and action sequences.
+    def _make_eval_env():
+        # record to eval_video.mp4 in the current working directory
+        return HorseRaceEnv(visualize=VISUALIZE, video_path="eval_video.mp4")
+
+    eval_env = DummyVecEnv([_make_eval_env])
+
+    # Resolve model path (fall back to resolve_load_path()
+    path = model_path if model_path is not None else resolve_load_path()
+    if path is None:
+        logger.error("No model found to evaluate (looked in %s).", LOAD_AGENT_DIR)
+        eval_env.close()
+        return
+
+    logger.info("Loading model from %s ...", path)
+    # Load model with the eval env so action/obs spaces are aligned.
+    # CRITICAL: Do NOT pass env=eval_env when loading a trained model
+    # because the model was trained WITHOUT a running env. Loading with
+    # env=None lets us use predict() without accidentally re-running training
+    model = PPO.load(path)
+
+    # Attach model to env instances so in-frame Save button / hotkey works
+    try:
+        attach_model_to_envs(eval_env, model)
+    except Exception:
+        # Non-fatal: attachment is just for the UI save hook
+        pass
+
+    # Lists to collect metrics (same shape/semantics as training)
+    episode_rewards = []
+    episode_durations = []
+    segment_times = []
+    completion_rates = []
+
+    episodes_run = 0
+    logger.info("Starting evaluation for %d episode(s)...", total_episodes)
+
+    # Vectorized API: we'll run a single env (vec size == 1)
+    obs = eval_env.reset()
+    # For some VecEnv implementations obs is shape (n_envs, obs_dim). Keep as-is.
+
+    # We'll run until we have collected total_episodes completed episodes.
+    # Each loop iteration steps the env once (batched).
+    ep_reward_accum = 0.0
+    # track per-episode step counter (vec env returns arrays)
+    ep_step_counts = [0]
+
+    while episodes_run < total_episodes:
+        # Predict deterministically
+        action, _ = model.predict(obs, deterministic=deterministic)
+        obs, rewards, dones, infos = eval_env.step(action)
+
+        # rewards/dones may be array-like (vec batch)
+        r = float(np.array(rewards).ravel()[0])
+        d = np.array(dones).ravel()[0]
+        info = infos[0] if isinstance(infos, (list, tuple)) else infos
+
+        ep_reward_accum += r
+        ep_step_counts[0] += 1
+
+        if d:
+            # Episode finished
+            episodes_run += 1
+            episode_rewards.append(ep_reward_accum)
+
+            # Extract episode_stats from info (same as training)
+            stats = info.get("episode_stats") if isinstance(info, dict) else None
+            if stats:
+                episode_durations.append(stats.get("duration_s"))
+                segment_times.append(list(stats.get("segment_splits", [None] * NUM_CHECKPOINTS)))
+                completion_rates.append(stats.get("completion_rate", 0.0))
+            else:
+                # No stats (unexpected) — mark as DNF / empty
+                episode_durations.append(None)
+                segment_times.append([None] * NUM_CHECKPOINTS)
+                completion_rates.append(0.0)
+
+            logger.info(
+                "Eval Episode %d: Reward=%.2f Duration=%s Completion=%.0f%%",
+                episodes_run,
+                episode_rewards[-1],
+                f"{episode_durations[-1]:.1f}s" if episode_durations[-1] is not None else "DNF",
+                completion_rates[-1] * 100.0,
+            )
+
+            # Reset accumulators for next episode
+            ep_reward_accum = 0.0
+            ep_step_counts[0] = 0
+            # Reset the environment to start next episode
+            obs = eval_env.reset()
+
+    # Save plots using the existing plotting helpers (prefixed files)
+    try:
+        plot_rewards(episode_rewards, save_path=save_plots_prefix + REWARD_PLOT_PATH)
+        plot_race_time(episode_durations, save_path=save_plots_prefix + RACE_TIME_PLOT_PATH)
+        plot_segment_times(segment_times, save_path=save_plots_prefix + SEGMENT_TIME_PLOT_PATH)
+        plot_completion_rate(completion_rates, save_path=save_plots_prefix + COMPLETION_RATE_PLOT_PATH)
+    except Exception as e:
+        logger.warning("Could not generate evaluation plots: %s", e)
+
+    # Print summary
+    logger.info("Evaluation complete: %d episodes", len(episode_rewards))
+    if episode_rewards:
+        logger.info("Reward: mean=%.2f  median=%.2f  min=%.2f  max=%.2f",
+                    float(np.mean(episode_rewards)),
+                    float(np.median(episode_rewards)),
+                    float(np.min(episode_rewards)),
+                    float(np.max(episode_rewards)))
+    if completion_rates:
+        logger.info("Completion rate: mean=%.1f%%", float(np.mean(completion_rates) * 100.0))
+
+    # Close environment
+    eval_env.close()
+
 # ===========================================================================
 #  8. Main
 # ===========================================================================
-
+TRAIN = True
 if __name__ == "__main__":
-    train(total_timesteps=TOTAL_TIMESTEPS)
+    if TRAIN:
+        logger.info("Training mode on...")
+        train(total_timesteps=TOTAL_TIMESTEPS)
+    else:
+        logger.info("Evaluation mode on...")
+        evaluate(seed = 3, total_episodes=3, deterministic=False)
