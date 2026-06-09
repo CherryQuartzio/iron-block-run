@@ -428,6 +428,14 @@ public class EnvServer {
                     }
                 }
                 if (serverPlayer != null) {
+                    // Must dismount on the SERVER side first. The client-side
+                    // stopRiding() earlier doesn't detach the authoritative server
+                    // player, so while it's still a passenger its position is bound
+                    // to the horse and setPlayerLocation() gets dragged back to the
+                    // vehicle — which is why teleport only failed while mounted.
+                    if (serverPlayer.isPassenger()) {
+                        serverPlayer.stopRiding();
+                    }
                     serverPlayer.setMotion(0, 0, 0);
                     serverPlayer.fallDistance = 0;
                     serverPlayer.connection.setPlayerLocation(x, y, z, yaw, pitch);
