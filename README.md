@@ -113,14 +113,18 @@ checkpoint in `./agent/`. Evaluation logs now include per-episode `env_fps`
 
 | Run | Command | What to check |
 |-----|---------|---------------|
-| Baseline | `main` branch, `python agent.py` (eval) | Lap complete; note `env_fps` and Step 0 `Z=-149` |
-| LAN + spectator | `lan` branch, `./run_agent.sh` | Step 0 mounted at spawn (`Z≈-149`, `Pitch=0°`); reaches CP_B |
+| Baseline | `main` branch, `python agent.py` (eval) | Lap complete; note `env_fps` and Step 0 pose (~`Z=-152` after the mount walk) |
+| LAN + spectator | `lan` branch, `./run_agent.sh` | Mounted at a Step 0 pose matching main (~`Z=-152`); no `moved too quickly` at start; reaches CP_B |
 | LAN, no spectator | `./run_agent.sh --no-lan` | Same as above; compare `env_fps` to isolate server load |
+
+Note: `Y` varies with track elevation, and the `mount may have failed` warning
+is a false positive on non-flat ground (the heuristic keys on `ypos` rising).
+Confirm mounting by spectating, not by `Y`.
 
 Server tick load is recorded in the PlayRecorder jsonl as `serverTickDurationMs`
 (under the MCP-Reborn run logs directory). Values consistently above ~50 ms
 indicate sub-20-TPS server pressure (often when a spectator is connected).
 
-Look for `[Persistent] Normalized mounted start to (-73.0, 71.0, -149.0)` in
-the Minecraft log on each episode mount.
+Look for `[HorseAI] Restored AI on mounted horse (NoAI cleared)` in the
+Minecraft log on each episode mount.
 

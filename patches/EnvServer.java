@@ -449,35 +449,18 @@ public class EnvServer {
         }
     }
 
-    // Snap the mounted agent and horse to the mission start pose so policy
-    // gameplay begins at the same world position as main-branch training.
-    // The mount walk can end near the horse spawn (a few blocks down-track);
-    // normalizing here keeps Step 0 aligned with the trained trajectory.
-    private void normalizeMountedStartPose(Minecraft mc) {
-        if (missionInit == null || mc.player == null) {
-            return;
-        }
-        PosAndDirection startPos = getAgentStart(missionInit).getPlacement();
-        if (startPos == null) {
-            return;
-        }
-        double x = startPos.getX();
-        double y = startPos.getY();
-        double z = startPos.getZ();
-        float yaw = startPos.getYaw();
-        float pitch = startPos.getPitch();
-
-        Entity clientVehicle = mc.player.getRidingEntity();
-        if (clientVehicle != null) {
-            clientVehicle.setLocationAndAngles(x, y, z, yaw, 0);
-            clientVehicle.setMotion(0, 0, 0);
-            clientVehicle.fallDistance = 0;
-        }
-        mc.player.rotationYaw = yaw;
-        mc.player.rotationPitch = pitch;
-
+    // Restore AI on the horse the agent has just mounted. The horse spawns with
+    // NoAI only to hold position before the mount (otherwise its wandering AI
+    // drifts it sideways off its spawn, so the agent mounts a displaced horse
+    // and starts the race off the centerline). Once mounted we clear NoAI so the
+    // ridden horse's server-side movement (LivingEntity.travel) matches main,
+    // where the horse always has AI enabled. Deliberately does NOT teleport the
+    // agent: main has no post-mount snap, and its mount walk also ends on the
+    // horse (~Z=-152), so snapping to the spawn block would diverge from main's
+    // actual episode-start pose.
+    private void clearRiddenHorseNoAi(Minecraft mc) {
         IntegratedServer integratedServer = mc.getIntegratedServer();
-        if (integratedServer == null) {
+        if (integratedServer == null || mc.player == null) {
             return;
         }
         final java.util.UUID playerId = mc.player.getUniqueID();
@@ -494,16 +477,13 @@ public class EnvServer {
                 return;
             }
             Entity vehicle = serverPlayer.getRidingEntity();
-            if (!(vehicle instanceof AbstractHorseEntity)) {
-                return;
+            if (vehicle instanceof AbstractHorseEntity) {
+                AbstractHorseEntity horse = (AbstractHorseEntity) vehicle;
+                if (horse.isAIDisabled()) {
+                    horse.setNoAI(false);
+                    LOGGER.info("[HorseAI] Restored AI on mounted horse (NoAI cleared)");
+                }
             }
-            AbstractHorseEntity horse = (AbstractHorseEntity) vehicle;
-            horse.setLocationAndAngles(x, y, z, yaw, 0);
-            horse.setMotion(0, 0, 0);
-            horse.fallDistance = 0;
-            serverPlayer.rotationYaw = yaw;
-            serverPlayer.rotationPitch = pitch;
-            LOGGER.info("[Persistent] Normalized mounted start to ({}, {}, {})", x, y, z);
         });
     }
 
@@ -667,6 +647,14 @@ public class EnvServer {
         horse.getAttribute(Attributes.HORSE_JUMP_STRENGTH).setBaseValue(HORSE_JUMP_STRENGTH);
         horse.getAttribute(Attributes.MAX_HEALTH).setBaseValue(HORSE_MAX_HEALTH);
         horse.setHealth(HORSE_HEALTH);
+
+        // Keep the horse stationary until the agent mounts it. With full AI the
+        // tamed horse wanders sideways off its spawn during the mount approach,
+        // so the agent mounts a displaced horse and starts the race off the
+        // centerline. NoAI holds it in place; it is cleared the instant the
+        // agent mounts (see clearRiddenHorseNoAi) so gameplay physics match
+        // main, where the ridden horse always has AI enabled.
+        horse.setNoAI(true);
         horse.setMotion(0, 0, 0);
     }
 
@@ -891,10 +879,10 @@ public class EnvServer {
                 LOGGER.warn("[Dismount] player left the horse at tick {} (alive={})",
                     PlayRecorder.getInstance().getTickCounter(), mc.player.isAlive());
             }
-            // On mount, snap agent+horse to the mission start pose so policy
-            // begins at the same track position as main-branch training.
+            // On mount, restore the horse's AI so ridden physics match main.
+            // (No pose snap: main does not teleport post-mount either.)
             if (riding && !wasRiding) {
-                normalizeMountedStartPose(mc);
+                clearRiddenHorseNoAi(mc);
             }
             wasRiding = riding;
         }
