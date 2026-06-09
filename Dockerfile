@@ -46,12 +46,15 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     openbox
 
 # --- Patch layer (rebuilds when patches/* changes) -----------------------
-# Keep this LAST: changing patches/EnvServer.java invalidates only the COPY
-# and the gradle recompile below — nothing above is re-run. The recompile of
-# the MCP-Reborn jar is the unavoidable cost of a patch change.
+# Keep this LAST: changing patches/*.java invalidates only the COPY and the
+# gradle recompile below — nothing above is re-run. The recompile of the
+# MCP-Reborn jar is the unavoidable cost of a patch change.
 COPY patches/EnvServer.java /tmp/patches/EnvServer.java
+COPY patches/ReplaySender.java /tmp/patches/ReplaySender.java
 RUN cp /tmp/patches/EnvServer.java \
     /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/src/main/java/com/minerl/multiagent/env/EnvServer.java \
+    && cp /tmp/patches/ReplaySender.java \
+    /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/src/main/java/net/minecraft/client/ReplaySender.java \
     && cd /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn \
     && ./gradlew shadowJar -x test
 CMD ["bash"]
