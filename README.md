@@ -54,47 +54,20 @@ The agent now exists at agent/ and will be loaded at the start of training.
 This branch keeps MineRL's integrated server online across episode resets and
 publishes it for vanilla **Minecraft 1.16.5 Java Edition** spectators.
 
-### Docker Swarm (VPS)
+### Docker deployment
 
 The image is pinned to `linux/amd64` because MineRL ships x86-64 LWJGL natives.
-On ARM VPS hosts (e.g. Oracle Ampere), Docker runs the container under QEMU
-emulation — this matches how `main` worked when using a pre-built amd64 image.
+On ARM hosts (e.g. Oracle Ampere), Docker runs the container under QEMU emulation.
 
-**ARM VPS build prerequisite:** cross-platform builds need QEMU binfmt on the host.
+**ARM build prerequisite:** cross-platform builds need QEMU binfmt on the host.
 Without it, `docker compose build` fails at an early `RUN apt-get ...` step with
-`exec /bin/sh: exec format error` (Docker is trying to execute amd64 `/bin/sh` on
-an ARM kernel). Run this once before building:
+`exec /bin/sh: exec format error`. Run this once before building:
 
 ```bash
 bash scripts/setup-docker-amd64-on-arm.sh
 ```
 
-Deploy on the VPS Swarm cluster (not required for local dev compose):
-
-```bash
-docker compose build
-docker stack deploy -c docker-compose.yml horserace
-```
-
-For a one-off run without compose:
-
-```bash
-docker run --platform linux/amd64 -it -v $(pwd):/workspace minerl-dev bash
-```
-
-Open inbound TCP **25560** (game) and **6080** (noVNC) on the VPS firewall /
-security group. Swarm maps external **25560** to internal **25565** where
-MineRL binds the integrated server.
-
-### Connect as a spectator
-
-1. Start training inside the container: `./run_agent.sh`
-2. Wait for the log line: `[LAN] Spectators can connect on internal port 25565`
-3. In Minecraft 1.16.5: Multiplayer → Direct Connect → `YOUR_VPS_IP:25560`
-4. Join in spectator mode; commands are enabled (`/tp`, `/gamemode`, etc.)
-5. Spectators stay connected when the agent resets between episodes
-
-### Local compose (non-Swarm)
+**Local or remote (standalone Docker):**
 
 ```bash
 docker compose build
@@ -102,7 +75,24 @@ docker compose up -d
 docker compose exec minerl bash -c './run_agent.sh'
 ```
 
-Direct Connect to `localhost:25560` when using the updated compose port mapping.
+On a remote server, copy the project, run the same commands, and open inbound
+TCP **25565** (Minecraft LAN) and **6080** (noVNC) on the host firewall.
+
+For a one-off run without compose:
+
+```bash
+docker run --platform linux/amd64 -it -v $(pwd):/workspace -p 25565:25565 -p 6080:6080 minerl-dev bash
+```
+
+### Connect as a spectator
+
+1. Start training inside the container: `./run_agent.sh`
+2. Wait for the log line: `[LAN] Spectators can connect on port 25565`
+3. In Minecraft 1.16.5: Multiplayer → Direct Connect → `HOST:25565`
+   - Local: `localhost:25565`
+   - Remote server: `YOUR_SERVER_IP:25565`
+4. Join in spectator mode; commands are enabled (`/tp`, `/gamemode`, etc.)
+5. Spectators stay connected when the agent resets between episodes
 
 ### Model compatibility
 

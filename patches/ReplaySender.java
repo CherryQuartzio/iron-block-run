@@ -137,6 +137,7 @@ public class ReplaySender {
         if (mode == Mode.OFF) {
             return;
         }
+        System.out.println("*** Clearing episode state, keeping replay mode active");
         actions.clear();
         firstTick = true;
         Minecraft mc = Minecraft.getInstance();

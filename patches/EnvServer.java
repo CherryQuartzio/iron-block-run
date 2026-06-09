@@ -60,7 +60,11 @@ import java.net.Socket;
 import java.nio.charset.Charset;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.Optional;
@@ -82,6 +86,9 @@ public class EnvServer {
     // the episode. Helps to render scene more fully and avoid unrendered chunks
     // TODO peterz validate this is actually still necessary, given the sync chunk loading
     private static final int DEFAULT_SKIP_FIRST_FRAMES = 20;
+    private static final long GAME_THREAD_TIMEOUT_MS = 5000L;
+    private static final long RECORDING_WAIT_TIMEOUT_MS = 30000L;
+    private static final long MAIN_MENU_WAIT_TIMEOUT_MS = 30000L;
 
     // Race horse stats (formerly DrawEntity NBTData in agent mission XML).
     private static final double HORSE_MOVEMENT_SPEED = 0.2;
@@ -94,6 +101,7 @@ public class EnvServer {
     private MissionInit missionInit;
     private String activeWorldSource = null;
     private boolean lanPublished = false;
+    private boolean configLogged = false;
 
     private int port;
     private String version;
@@ -290,6 +298,8 @@ public class EnvServer {
 
         this.doneOnDeath = isDoneOnDeath(missionInit);
 
+        logPersistentConfig(mc);
+
         setGameSetttings(missionInit);
         mc.getSession().setUsername(missionInit.getMission().getAgentSection().get(0).getName());
         setUsername(missionInit);
@@ -307,9 +317,7 @@ public class EnvServer {
             activeWorldSource = worldSrc;
         }
 
-        while (!PlayRecorder.getInstance().isRecording()) {
-            Thread.sleep(10);
-        }
+        waitForRecording();
 
         if (!reuseWorld) {
             maybeOpenToLan();
@@ -996,12 +1004,13 @@ public class EnvServer {
             LOGGER.info("[Persistent] Soft quit — keeping integrated server and LAN clients");
             ReplaySender.getInstance().clearEpisodeState();
         } else {
+            if (!forceHard) {
+                LOGGER.warn("[Persistent] Hard quit — soft reset unavailable");
+            }
             ReplaySender.getInstance().stop();
             activeWorldSource = null;
             lanPublished = false;
-            while (!(mc.currentScreen instanceof MainMenuScreen)) {
-                Thread.sleep(10);
-            }
+            waitForMainMenu(mc);
         }
 
         DataOutputStream dout = new DataOutputStream(socket.getOutputStream());
@@ -1010,24 +1019,105 @@ public class EnvServer {
         dout.flush();
     }
 
+    private String getConfigValue(String name, String defaultValue) {
+        String prop = System.getProperty(name);
+        if (prop != null && !prop.isEmpty()) {
+            return prop;
+        }
+        String env = System.getenv(name);
+        return env != null ? env : defaultValue;
+    }
+
+    private boolean runOnGameThread(BooleanSupplier check) {
+        Minecraft mc = Minecraft.getInstance();
+        AtomicBoolean result = new AtomicBoolean(false);
+        CountDownLatch latch = new CountDownLatch(1);
+        mc.execute(() -> {
+            try {
+                result.set(check.getAsBoolean());
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            if (!latch.await(GAME_THREAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                LOGGER.warn("[Persistent] Timed out waiting for game-thread check");
+                return false;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        return result.get();
+    }
+
+    private void logPersistentConfig(Minecraft mc) {
+        if (configLogged) {
+            return;
+        }
+        configLogged = true;
+        boolean persistent = isPersistentServerEnabled();
+        boolean lan = isLanEnabled();
+        int lanPort = getLanPort();
+        boolean softReady = runOnGameThread(() -> {
+            return mc.getIntegratedServer() != null && mc.world != null;
+        });
+        LOGGER.info("[Persistent] Config: persistent={} lan={} port={} softResetReady={}",
+                persistent, lan, lanPort, softReady);
+    }
+
+    private void waitForRecording() throws InterruptedException {
+        PlayRecorder pr = PlayRecorder.getInstance();
+        long deadline = System.currentTimeMillis() + RECORDING_WAIT_TIMEOUT_MS;
+        while (!pr.isRecording()) {
+            if (System.currentTimeMillis() >= deadline) {
+                LOGGER.error("[Persistent] Timed out waiting for PlayRecorder; nudging start on game thread");
+                Minecraft mc = Minecraft.getInstance();
+                mc.execute(() -> {
+                    if (!pr.isRecording()) {
+                        pr.start();
+                    }
+                });
+                Thread.sleep(500);
+                if (!pr.isRecording()) {
+                    throw new InterruptedException("PlayRecorder did not start within timeout");
+                }
+                return;
+            }
+            Thread.sleep(10);
+        }
+    }
+
+    private void waitForMainMenu(Minecraft mc) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + MAIN_MENU_WAIT_TIMEOUT_MS;
+        while (true) {
+            if (runOnGameThread(() -> mc.currentScreen instanceof MainMenuScreen)) {
+                return;
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                LOGGER.error("[Persistent] Timed out waiting for MainMenuScreen after hard quit; proceeding");
+                return;
+            }
+            Thread.sleep(10);
+        }
+    }
+
     private boolean isPersistentServerEnabled() {
-        String enabled = System.getenv("MINERL_PERSISTENT_SERVER");
-        return enabled == null || !enabled.equalsIgnoreCase("false");
+        String enabled = getConfigValue("MINERL_PERSISTENT_SERVER", "true");
+        return !enabled.equalsIgnoreCase("false");
     }
 
     private boolean isLanEnabled() {
-        String enabled = System.getenv("MINERL_LAN_ENABLED");
-        return enabled == null || !enabled.equalsIgnoreCase("false");
+        String enabled = getConfigValue("MINERL_LAN_ENABLED", "true");
+        return !enabled.equalsIgnoreCase("false");
     }
 
     private int getLanPort() {
         int port = 25565;
-        String portEnv = System.getenv("MINERL_LAN_PORT");
-        if (portEnv != null) {
-            try {
-                port = Integer.parseInt(portEnv);
-            } catch (NumberFormatException ignored) {
-            }
+        String portEnv = getConfigValue("MINERL_LAN_PORT", "25565");
+        try {
+            port = Integer.parseInt(portEnv);
+        } catch (NumberFormatException ignored) {
         }
         return port;
     }
@@ -1036,8 +1126,10 @@ public class EnvServer {
         if (!isPersistentServerEnabled()) {
             return false;
         }
-        Minecraft mc = Minecraft.getInstance();
-        return mc.getIntegratedServer() != null && mc.world != null;
+        return runOnGameThread(() -> {
+            Minecraft mc = Minecraft.getInstance();
+            return mc.getIntegratedServer() != null && mc.world != null;
+        });
     }
 
     private boolean canReuseWorld(String worldSrc) {
@@ -1064,7 +1156,7 @@ public class EnvServer {
             boolean ok = server.shareToLAN(GameType.SPECTATOR, true, port);
             if (ok) {
                 lanPublished = true;
-                LOGGER.info("[LAN] Spectators can connect on internal port {} (publish external :25560 on Swarm)", server.getServerPort());
+                LOGGER.info("[LAN] Spectators can connect on port {}", server.getServerPort());
             } else {
                 LOGGER.warn("[LAN] shareToLAN failed on port {} (in use?)", port);
             }

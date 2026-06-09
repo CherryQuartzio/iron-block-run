@@ -1309,6 +1309,22 @@ class HorseRaceEnv(gym.Env):
             )
             return fallback, 0.0, True, {"error": str(e)}
 
+    def _minerl_reset(self):
+        """Call the inner MineRL env reset, retrying once on comms failure."""
+        last_error = None
+        for attempt in range(2):
+            try:
+                return self._env.reset()
+            except (TimeoutError, OSError, ConnectionError) as e:
+                last_error = e
+                logger.error(
+                    "MineRL reset failed (%s); attempt %d/2",
+                    e,
+                    attempt + 1,
+                    exc_info=True,
+                )
+        raise last_error
+
     @staticmethod
     def _unpack_step(result):
         if len(result) == 5:
@@ -1324,7 +1340,7 @@ class HorseRaceEnv(gym.Env):
         Reset the environment, mount the horse, and return the first
         preprocessed observation.
         """
-        obs = self._env.reset()
+        obs = self._minerl_reset()
         self._episode_num += 1
 
         # Execute the horse-mounting startup sequence
