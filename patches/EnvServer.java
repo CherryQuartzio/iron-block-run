@@ -1429,25 +1429,29 @@ public class EnvServer {
 
     private void cleanupEpisodeHorses(Minecraft mc) {
         MinecraftServer server = mc.getIntegratedServer();
-        if (server == null) {
+        if (server == null || mc.player == null) {
             return;
         }
         ServerWorld serverWorld = server.getWorld(World.OVERWORLD);
         // IMPORTANT: do NOT pass a world-spanning AABB here. getEntitiesWithinAABB
         // iterates chunk sections across the whole box footprint, so a +/-3e7 box
         // makes the game thread walk billions of empty sections and hang forever.
-        // The race track + spawned horses live near the agent start, so bound the
-        // search to a generous region centered on the player.
+        // Only remove horses owned by the RL agent (spawned via configureSpawnedHorse).
+        // LAN players' mounts share the start area but have a different owner UUID.
+        UUID agentId = mc.player.getUniqueID();
         double cx = mc.player.getPosX();
         double cz = mc.player.getPosZ();
         double radius = HORSE_CLEANUP_RADIUS;
         AxisAlignedBB bounds = new AxisAlignedBB(
                 cx - radius, -64, cz - radius,
                 cx + radius, 320, cz + radius);
-        List<HorseEntity> horses = serverWorld.getEntitiesWithinAABB(EntityType.HORSE, bounds, e -> true);
+        List<HorseEntity> horses = serverWorld.getEntitiesWithinAABB(
+                EntityType.HORSE,
+                bounds,
+                horse -> agentId.equals(horse.getOwnerUniqueId()));
         for (HorseEntity horse : horses) {
             horse.remove();
         }
-        LOGGER.info("[Persistent] Removed {} horse(s) within {} blocks of agent", horses.size(), radius);
+        LOGGER.info("[Persistent] Removed {} agent-owned horse(s) (LAN mounts preserved)", horses.size());
     }
 }

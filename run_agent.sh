@@ -19,6 +19,7 @@ usage() {
     echo "  --no-lan            Disable integrated-server LAN publishing."
     echo "  --no-persistent     Full world reload on each episode reset."
     echo "  --lan-port PORT     Internal LAN bind port (default 25565)."
+    echo "  --episodes N        Stop after N agent episodes (default: run until Ctrl+C)."
     echo "  -h, --help          Show this help message."
     exit 1
 }

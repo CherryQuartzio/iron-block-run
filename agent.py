@@ -2561,12 +2561,12 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
 
 
 def evaluate(
-        total_episodes: int = 10,
+        total_episodes: Optional[int] = None,
         model_path: Optional[str] = None,
         render: bool = False,
         seed: int = 42,
         save_plots_prefix: str = "eval_",
-        deterministic:bool = True
+        deterministic: bool = True,
 ):
     """
     Deterministic evaluation of the trained agent.
@@ -2575,7 +2575,8 @@ def evaluate(
     train. Actions are selected with model.predict(..., deterministic=True).
 
     Args:
-        total_episodes: Number of full episodes to run (complete or DNF).
+        total_episodes: Number of full episodes to run (complete or DNF). None runs
+            until interrupted (keeps the integrated server alive for LAN play).
         model_path: Optional explicit path to the model zip (if None, uses resolve_load_path()).
         render: If True, create env(s) with visualization enabled (opens CV window).
         seed: RNG seed for numpy/python random to reduce nondeterminism.
@@ -2629,13 +2630,15 @@ def evaluate(
     completion_rates = []
 
     episodes_run = 0
-    logger.info("Starting evaluation for %d episode(s)...", total_episodes)
+    if total_episodes is None:
+        logger.info("Starting continuous evaluation (Ctrl+C to stop)...")
+    else:
+        logger.info("Starting evaluation for %d episode(s)...", total_episodes)
 
     # Vectorized API: we'll run a single env (vec size == 1)
     obs = eval_env.reset()
     # For some VecEnv implementations obs is shape (n_envs, obs_dim). Keep as-is.
 
-    # We'll run until we have collected total_episodes completed episodes.
     # Each loop iteration steps the env once (batched).
     ep_reward_accum = 0.0
     # track per-episode step counter (vec env returns arrays)
@@ -2643,66 +2646,70 @@ def evaluate(
     ep_step_times: list[float] = []
     all_step_times: list[float] = []
 
-    while episodes_run < total_episodes:
-        # Predict deterministically
-        action, _ = model.predict(obs, deterministic=deterministic)
-        step_t0 = _time.perf_counter()
-        obs, rewards, dones, infos = eval_env.step(action)
-        step_dt = _time.perf_counter() - step_t0
-        ep_step_times.append(step_dt)
-        all_step_times.append(step_dt)
-
-        # rewards/dones may be array-like (vec batch)
-        r = float(np.array(rewards).ravel()[0])
-        d = np.array(dones).ravel()[0]
-        info = infos[0] if isinstance(infos, (list, tuple)) else infos
-
-        ep_reward_accum += r
-        ep_step_counts[0] += 1
-
-        if d:
-            # Episode finished
-            episodes_run += 1
-            episode_rewards.append(ep_reward_accum)
-
-            # Extract episode_stats from info (same as training)
-            stats = info.get("episode_stats") if isinstance(info, dict) else None
-            if stats:
-                episode_durations.append(stats.get("duration_s"))
-                segment_times.append(list(stats.get("segment_splits", [None] * NUM_CHECKPOINTS)))
-                completion_rates.append(stats.get("completion_rate", 0.0))
-            else:
-                # No stats (unexpected) — mark as DNF / empty
-                episode_durations.append(None)
-                segment_times.append([None] * NUM_CHECKPOINTS)
-                completion_rates.append(0.0)
-
-            mean_step_s = float(np.mean(ep_step_times)) if ep_step_times else 0.0
-            env_fps = (1.0 / mean_step_s) if mean_step_s > 0 else 0.0
-            logger.info(
-                "Eval Episode %d: Reward=%.2f Duration=%s Completion=%.0f%% env_fps=%.1f",
-                episodes_run,
-                episode_rewards[-1],
-                f"{episode_durations[-1]:.1f}s" if episode_durations[-1] is not None else "DNF",
-                completion_rates[-1] * 100.0,
-                env_fps,
-            )
-
-            # Reset accumulators for next episode
-            ep_reward_accum = 0.0
-            ep_step_counts[0] = 0
-            ep_step_times = []
-            # Reset the environment to start next episode
-            obs = eval_env.reset()
-
-    # Save plots using the existing plotting helpers (prefixed files)
     try:
-        plot_rewards(episode_rewards, save_path=save_plots_prefix + REWARD_PLOT_PATH)
-        plot_race_time(episode_durations, save_path=save_plots_prefix + RACE_TIME_PLOT_PATH)
-        plot_segment_times(segment_times, save_path=save_plots_prefix + SEGMENT_TIME_PLOT_PATH)
-        plot_completion_rate(completion_rates, save_path=save_plots_prefix + COMPLETION_RATE_PLOT_PATH)
-    except Exception as e:
-        logger.warning("Could not generate evaluation plots: %s", e)
+        while total_episodes is None or episodes_run < total_episodes:
+            # Predict deterministically
+            action, _ = model.predict(obs, deterministic=deterministic)
+            step_t0 = _time.perf_counter()
+            obs, rewards, dones, infos = eval_env.step(action)
+            step_dt = _time.perf_counter() - step_t0
+            ep_step_times.append(step_dt)
+            all_step_times.append(step_dt)
+
+            # rewards/dones may be array-like (vec batch)
+            r = float(np.array(rewards).ravel()[0])
+            d = np.array(dones).ravel()[0]
+            info = infos[0] if isinstance(infos, (list, tuple)) else infos
+
+            ep_reward_accum += r
+            ep_step_counts[0] += 1
+
+            if d:
+                # Episode finished
+                episodes_run += 1
+                episode_rewards.append(ep_reward_accum)
+
+                # Extract episode_stats from info (same as training)
+                stats = info.get("episode_stats") if isinstance(info, dict) else None
+                if stats:
+                    episode_durations.append(stats.get("duration_s"))
+                    segment_times.append(list(stats.get("segment_splits", [None] * NUM_CHECKPOINTS)))
+                    completion_rates.append(stats.get("completion_rate", 0.0))
+                else:
+                    # No stats (unexpected) — mark as DNF / empty
+                    episode_durations.append(None)
+                    segment_times.append([None] * NUM_CHECKPOINTS)
+                    completion_rates.append(0.0)
+
+                mean_step_s = float(np.mean(ep_step_times)) if ep_step_times else 0.0
+                env_fps = (1.0 / mean_step_s) if mean_step_s > 0 else 0.0
+                logger.info(
+                    "Eval Episode %d: Reward=%.2f Duration=%s Completion=%.0f%% env_fps=%.1f",
+                    episodes_run,
+                    episode_rewards[-1],
+                    f"{episode_durations[-1]:.1f}s" if episode_durations[-1] is not None else "DNF",
+                    completion_rates[-1] * 100.0,
+                    env_fps,
+                )
+
+                # Reset accumulators for next episode
+                ep_reward_accum = 0.0
+                ep_step_counts[0] = 0
+                ep_step_times = []
+                # Reset the environment to start next episode
+                obs = eval_env.reset()
+    except KeyboardInterrupt:
+        logger.info("Evaluation interrupted after %d episode(s).", episodes_run)
+
+    # Save plots when a finite run completed (skip for open-ended sessions).
+    if total_episodes is not None and episode_rewards:
+        try:
+            plot_rewards(episode_rewards, save_path=save_plots_prefix + REWARD_PLOT_PATH)
+            plot_race_time(episode_durations, save_path=save_plots_prefix + RACE_TIME_PLOT_PATH)
+            plot_segment_times(segment_times, save_path=save_plots_prefix + SEGMENT_TIME_PLOT_PATH)
+            plot_completion_rate(completion_rates, save_path=save_plots_prefix + COMPLETION_RATE_PLOT_PATH)
+        except Exception as e:
+            logger.warning("Could not generate evaluation plots: %s", e)
 
     # Print summary
     logger.info("Evaluation complete: %d episodes", len(episode_rewards))
@@ -2729,11 +2736,45 @@ def evaluate(
 # ===========================================================================
 #  8. Main
 # ===========================================================================
-TRAIN = False
+def _parse_cli_args():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Horse race RL agent")
+    parser.add_argument(
+        "--train",
+        action="store_true",
+        help="Train a new model instead of evaluating the loaded checkpoint",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Stop after N evaluation episodes (default: run until Ctrl+C)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=3,
+        help="RNG seed for evaluation (default: 3)",
+    )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Use deterministic policy actions during evaluation",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    if TRAIN:
+    args = _parse_cli_args()
+    if args.train:
         logger.info("Training mode on...")
         train(total_timesteps=TOTAL_TIMESTEPS)
     else:
         logger.info("Evaluation mode on...")
-        evaluate(seed = 3, total_episodes=3, deterministic=False)
+        evaluate(
+            seed=args.seed,
+            total_episodes=args.episodes,
+            deterministic=args.deterministic,
+        )
