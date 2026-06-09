@@ -1,4 +1,6 @@
-FROM condaforge/miniforge3:24.11.3-0
+# MineRL bundles x86-64 LWJGL natives; pin amd64 so ARM VPS hosts run via QEMU
+# instead of a native arm64 JVM that cannot load those libraries.
+FROM --platform=linux/amd64 condaforge/miniforge3:24.11.3-0
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TMPDIR=/opt/tmp
 ENV TEMP=/opt/tmp

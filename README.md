@@ -56,10 +56,21 @@ publishes it for vanilla **Minecraft 1.16.5 Java Edition** spectators.
 
 ### Docker Swarm (VPS)
 
+The image is pinned to `linux/amd64` because MineRL ships x86-64 LWJGL natives.
+On ARM VPS hosts (e.g. Oracle Ampere), Docker runs the container under QEMU
+emulation — this matches how `main` worked when using a pre-built amd64 image.
+
 Deploy on the VPS Swarm cluster (not required for local dev compose):
 
 ```bash
+docker compose build
 docker stack deploy -c docker-compose.yml horserace
+```
+
+For a one-off run without compose:
+
+```bash
+docker run --platform linux/amd64 -it -v $(pwd):/workspace minerl-dev bash
 ```
 
 Open inbound TCP **25560** (game) and **6080** (noVNC) on the VPS firewall /
