@@ -53,11 +53,14 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 # the MCP-Reborn jar is the unavoidable cost of a patch change.
 COPY patches/EnvServer.java /tmp/patches/EnvServer.java
 COPY patches/ReplaySender.java /tmp/patches/ReplaySender.java
+COPY patches/PlayRecorder.java /tmp/patches/PlayRecorder.java
 COPY patches/launchClient.sh /tmp/patches/launchClient.sh
 RUN cp /tmp/patches/EnvServer.java \
     /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/src/main/java/com/minerl/multiagent/env/EnvServer.java \
     && cp /tmp/patches/ReplaySender.java \
     /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/src/main/java/net/minecraft/client/ReplaySender.java \
+    && cp /tmp/patches/PlayRecorder.java \
+    /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/src/main/java/com/minerl/multiagent/recorder/PlayRecorder.java \
     && cp /tmp/patches/launchClient.sh \
     /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/launchClient.sh \
     && chmod +x /opt/conda/lib/python3.10/site-packages/minerl/MCP-Reborn/launchClient.sh \

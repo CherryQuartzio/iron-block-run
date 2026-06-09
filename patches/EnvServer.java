@@ -87,6 +87,7 @@ public class EnvServer {
     // TODO peterz validate this is actually still necessary, given the sync chunk loading
     private static final int DEFAULT_SKIP_FIRST_FRAMES = 20;
     private static final long GAME_THREAD_TIMEOUT_MS = 5000L;
+    private static final long GAME_THREAD_TASK_TIMEOUT_MS = 10000L;
     private static final long RECORDING_WAIT_TIMEOUT_MS = 30000L;
     private static final long MAIN_MENU_WAIT_TIMEOUT_MS = 30000L;
 
@@ -310,7 +311,11 @@ public class EnvServer {
 
         if (reuseWorld) {
             LOGGER.info("[Persistent] Soft episode reset — reusing loaded world");
-            mc.execute(() -> resetAgentForNewEpisode(missionInit));
+            runOnGameThreadWithPump(() -> {
+                resetAgentForNewEpisode(missionInit);
+                PlayRecorder.getInstance().softResetEpisode();
+                ReplaySender.getInstance().clearEpisodeState();
+            });
         } else {
             integratedServerAlive = false;
             activeWorldSource = null;
@@ -1003,15 +1008,14 @@ public class EnvServer {
         }
         boolean soft = !forceHard && canSoftReset();
         if (soft) {
-            // Unblock the game thread (ReplaySender action wait) before any
-            // synchronous work — otherwise runOnGameThread / quit can deadlock.
+            // Keep recording alive and unblock ReplaySender — finishAndResetEpisode()
+            // stops recording and causes a game-thread / socket-thread deadlock on reset.
             ReplaySender.getInstance().clearEpisodeState();
-        }
-        PlayRecorder.getInstance().finishAndResetEpisode();
-
-        if (soft) {
+            PlayRecorder.getInstance().softResetEpisode();
+            pumpReplaySender();
             LOGGER.info("[Persistent] Soft quit — keeping integrated server and LAN clients");
         } else {
+            PlayRecorder.getInstance().finishAndResetEpisode();
             if (!forceHard) {
                 LOGGER.warn("[Persistent] Hard quit — soft reset unavailable (alive={} world={})",
                         integratedServerAlive, activeWorldSource);
@@ -1036,6 +1040,26 @@ public class EnvServer {
         }
         String env = System.getenv(name);
         return env != null ? env : defaultValue;
+    }
+
+    private void runOnGameThreadWithPump(Runnable task) throws InterruptedException {
+        Minecraft mc = Minecraft.getInstance();
+        CountDownLatch latch = new CountDownLatch(1);
+        mc.execute(() -> {
+            try {
+                task.run();
+            } finally {
+                latch.countDown();
+            }
+        });
+        long deadline = System.currentTimeMillis() + GAME_THREAD_TASK_TIMEOUT_MS;
+        while (latch.getCount() > 0 && System.currentTimeMillis() < deadline) {
+            pumpReplaySender();
+            latch.await(10, TimeUnit.MILLISECONDS);
+        }
+        if (latch.getCount() > 0) {
+            LOGGER.warn("[Persistent] Timed out waiting for game-thread task (pumped replay)");
+        }
     }
 
     private boolean runOnGameThread(BooleanSupplier check) {
@@ -1072,23 +1096,52 @@ public class EnvServer {
 
     private void waitForRecording() throws InterruptedException {
         PlayRecorder pr = PlayRecorder.getInstance();
+        if (pr.isRecording()) {
+            return;
+        }
         long deadline = System.currentTimeMillis() + RECORDING_WAIT_TIMEOUT_MS;
+        int pumps = 0;
         while (!pr.isRecording()) {
+            // ReplaySender blocks the game thread on an empty action queue; pump
+            // noop actions so PlayRecorder.tick() can call start().
+            if (pumps++ % 3 == 0) {
+                pumpReplaySender();
+            }
             if (System.currentTimeMillis() >= deadline) {
-                LOGGER.error("[Persistent] Timed out waiting for PlayRecorder; nudging start on game thread");
-                Minecraft mc = Minecraft.getInstance();
-                mc.execute(() -> {
-                    if (!pr.isRecording()) {
-                        pr.start();
-                    }
-                });
-                Thread.sleep(500);
-                if (!pr.isRecording()) {
-                    throw new InterruptedException("PlayRecorder did not start within timeout");
-                }
+                LOGGER.warn("[Persistent] PlayRecorder slow to start; forcing on game thread");
+                forceStartRecording(pr);
                 return;
             }
             Thread.sleep(10);
+        }
+    }
+
+    private void pumpReplaySender() {
+        if (ReplaySender.getInstance().getMode() == ReplaySender.Mode.EXEC_CMD) {
+            execActions("camera 0 0.0", 0);
+        }
+    }
+
+    private void forceStartRecording(PlayRecorder pr) throws InterruptedException {
+        Minecraft mc = Minecraft.getInstance();
+        CountDownLatch latch = new CountDownLatch(1);
+        mc.execute(() -> {
+            try {
+                pumpReplaySender();
+                if (!pr.isRecording()) {
+                    pr.start();
+                }
+            } catch (RuntimeException e) {
+                LOGGER.error("[Persistent] PlayRecorder.start() failed", e);
+            } finally {
+                latch.countDown();
+            }
+        });
+        if (!latch.await(15, TimeUnit.SECONDS)) {
+            LOGGER.error("[Persistent] Timed out forcing PlayRecorder start on game thread");
+        }
+        if (!pr.isRecording()) {
+            LOGGER.error("[Persistent] PlayRecorder still not recording after force start");
         }
     }
 
