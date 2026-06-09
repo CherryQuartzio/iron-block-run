@@ -22,6 +22,7 @@ import net.minecraft.entity.ai.attributes.Attributes;
 import net.minecraft.entity.passive.horse.AbstractHorseEntity;
 import net.minecraft.entity.passive.horse.HorseEntity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.player.ServerPlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.nbt.CompoundNBT;
@@ -311,11 +312,14 @@ public class EnvServer {
 
         if (reuseWorld) {
             LOGGER.info("[Persistent] Soft episode reset — reusing loaded world");
-            runOnGameThreadWithPump(() -> {
+            boolean resetOk = runOnGameThreadWithPump(() -> {
                 resetAgentForNewEpisode(missionInit);
                 PlayRecorder.getInstance().softResetEpisode();
                 ReplaySender.getInstance().clearEpisodeState();
             });
+            if (!resetOk) {
+                LOGGER.error("[Persistent] Soft episode reset may be incomplete — agent/horse position not updated");
+            }
         } else {
             integratedServerAlive = false;
             activeWorldSource = null;
@@ -373,9 +377,33 @@ public class EnvServer {
         if (startPos == null) {
             return;
         }
-        player.setPosition(startPos.getX(), startPos.getY(), startPos.getZ());
-        player.rotationYaw = startPos.getYaw();
-        player.rotationPitch = startPos.getPitch();
+        double x = startPos.getX();
+        double y = startPos.getY();
+        double z = startPos.getZ();
+        float yaw = startPos.getYaw();
+        float pitch = startPos.getPitch();
+
+        player.setMotion(0, 0, 0);
+        player.fallDistance = 0;
+
+        Minecraft mc = Minecraft.getInstance();
+        IntegratedServer integratedServer = mc.getIntegratedServer();
+        if (integratedServer != null) {
+            ServerPlayerEntity serverPlayer = integratedServer.getPlayerList().getPlayerByUUID(player.getUniqueID());
+            if (serverPlayer != null) {
+                serverPlayer.setMotion(0, 0, 0);
+                serverPlayer.fallDistance = 0;
+                serverPlayer.setLocationAndAngles(x, y, z, yaw, pitch);
+                serverPlayer.setPositionAndUpdate(x, y, z);
+                serverPlayer.connection.setPlayerLocation(x, y, z, yaw, pitch);
+            }
+        }
+
+        player.setLocationAndAngles(x, y, z, yaw, pitch);
+        player.rotationYaw = yaw;
+        player.rotationPitch = pitch;
+
+        LOGGER.info("[Persistent] Agent reset to ({}, {}, {})", x, y, z);
     }
 
     private void enforceAgentGameMode(MissionInit missionInit) {
@@ -1042,7 +1070,7 @@ public class EnvServer {
         return env != null ? env : defaultValue;
     }
 
-    private void runOnGameThreadWithPump(Runnable task) throws InterruptedException {
+    private boolean runOnGameThreadWithPump(Runnable task) throws InterruptedException {
         Minecraft mc = Minecraft.getInstance();
         CountDownLatch latch = new CountDownLatch(1);
         mc.execute(() -> {
@@ -1058,8 +1086,10 @@ public class EnvServer {
             latch.await(10, TimeUnit.MILLISECONDS);
         }
         if (latch.getCount() > 0) {
-            LOGGER.warn("[Persistent] Timed out waiting for game-thread task (pumped replay)");
+            LOGGER.error("[Persistent] Game-thread reset task timed out — agent/horse may not have been repositioned");
+            return false;
         }
+        return true;
     }
 
     private boolean runOnGameThread(BooleanSupplier check) {
@@ -1240,34 +1270,24 @@ public class EnvServer {
         setAgentInventory(mc.player, missionInit);
         setAgentPosition(mc.player, missionInit);
         enforceAgentGameMode(missionInit);
-        cleanupEpisodeHorses(missionInit, mc);
+        cleanupEpisodeHorses(mc);
         applyWorldDecorators(missionInit);
 
-        Pos startV = getAgentStart(missionInit).getVelocity();
-        if (startV != null) {
-            mc.player.setMotion(startV.getX(), startV.getY(), startV.getZ());
-        }
+        mc.player.setMotion(0, 0, 0);
+        mc.player.fallDistance = 0;
     }
 
-    private void cleanupEpisodeHorses(MissionInit missionInit, Minecraft mc) {
+    private void cleanupEpisodeHorses(Minecraft mc) {
         MinecraftServer server = mc.getIntegratedServer();
         if (server == null) {
             return;
         }
         ServerWorld serverWorld = server.getWorld(World.OVERWORLD);
-        PosAndDirection startPos = getAgentStart(missionInit).getPlacement();
-        double cx = startPos != null ? startPos.getX() : mc.player.getPosX();
-        double cy = startPos != null ? startPos.getY() : mc.player.getPosY();
-        double cz = startPos != null ? startPos.getZ() : mc.player.getPosZ();
-        double radius = 15.0;
-        AxisAlignedBB box = new AxisAlignedBB(
-            cx - radius, cy - radius, cz - radius,
-            cx + radius, cy + radius, cz + radius
-        );
-        List<HorseEntity> horses = serverWorld.getEntitiesWithinAABB(EntityType.HORSE, box, e -> true);
+        AxisAlignedBB worldBounds = new AxisAlignedBB(-3.0E7, -64, -3.0E7, 3.0E7, 320, 3.0E7);
+        List<HorseEntity> horses = serverWorld.getEntitiesWithinAABB(EntityType.HORSE, worldBounds, e -> true);
         for (HorseEntity horse : horses) {
             horse.remove();
         }
-        LOGGER.info("[Persistent] Removed {} horse(s) near spawn", horses.size());
+        LOGGER.info("[Persistent] Removed {} horse(s) from world", horses.size());
     }
 }
