@@ -60,6 +60,15 @@ The image is pinned to `linux/amd64` because MineRL ships x86-64 LWJGL natives.
 On ARM VPS hosts (e.g. Oracle Ampere), Docker runs the container under QEMU
 emulation — this matches how `main` worked when using a pre-built amd64 image.
 
+**ARM VPS build prerequisite:** cross-platform builds need QEMU binfmt on the host.
+Without it, `docker compose build` fails at an early `RUN apt-get ...` step with
+`exec /bin/sh: exec format error` (Docker is trying to execute amd64 `/bin/sh` on
+an ARM kernel). Run this once before building:
+
+```bash
+bash scripts/setup-docker-amd64-on-arm.sh
+```
+
 Deploy on the VPS Swarm cluster (not required for local dev compose):
 
 ```bash
