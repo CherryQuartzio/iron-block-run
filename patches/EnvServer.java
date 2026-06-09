@@ -583,6 +583,12 @@ public class EnvServer {
         horse.getAttribute(Attributes.HORSE_JUMP_STRENGTH).setBaseValue(HORSE_JUMP_STRENGTH);
         horse.getAttribute(Attributes.MAX_HEALTH).setBaseValue(HORSE_MAX_HEALTH);
         horse.setHealth(HORSE_HEALTH);
+
+        // Disable AI so the horse stays put until the agent mounts it; otherwise
+        // it can wander off before the mount sequence completes. Riding still works
+        // because the rider drives movement directly, not the horse's own AI.
+        horse.setNoAI(true);
+        horse.setMotion(0, 0, 0);
     }
 
     private String getSaveFile(MissionInit missionInit) {
