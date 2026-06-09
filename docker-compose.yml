@@ -24,7 +24,7 @@ services:
         protocol: tcp
         mode: ingress
       - target: 25565
-        published: 25560
+        published: 25565
         protocol: tcp
         mode: ingress
     shm_size: "4gb"
