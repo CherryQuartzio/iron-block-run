@@ -346,19 +346,11 @@ public class EnvServer {
         integratedServerAlive = true;
         maybeOpenToLan();
 
-        PlayRecorder pr = PlayRecorder.getInstance();
-        envTickCounter = pr.getTickCounter();
-        // Prime the action pipeline so the first skip-frame step can advance ticks.
-        pumpReplaySender();
+        envTickCounter = PlayRecorder.getInstance().getTickCounter();
         int skipFrames = DEFAULT_SKIP_FIRST_FRAMES;
         for (int i = 0; i < skipFrames; i++) {
-            int tickBefore = pr.getTickCounter();
             execActions("camera 0 0.0", 0);
             waitForNextObservation();
-            if (tickBefore == pr.getTickCounter()) {
-                LOGGER.warn("[Persistent] Skip frame {} did not advance tick (stuck at {})", i, tickBefore);
-                pumpReplaySender();
-            }
         }
 
         // Match main: spawn the horse after warmup skip frames so chunks are
@@ -847,20 +839,17 @@ public class EnvServer {
         long deadline = System.currentTimeMillis() + OBSERVATION_WAIT_TIMEOUT_MS;
 
         try {
-            while (envTickCounter == pr.getTickCounter()) {
-                if (System.currentTimeMillis() >= deadline) {
-                    LOGGER.error(
-                            "[Persistent] Timed out waiting for observation (stuck at tick {})",
-                            envTickCounter);
-                    envTickCounter = pr.getTickCounter();
-                    return;
-                }
-                pumpReplaySender();
-                synchronized (pr) {
-                    if (envTickCounter != pr.getTickCounter()) {
-                        break;
+            synchronized (pr) {
+                while (envTickCounter == pr.getTickCounter()) {
+                    if (System.currentTimeMillis() >= deadline) {
+                        LOGGER.error(
+                                "[Persistent] Timed out waiting for observation (stuck at tick {})",
+                                envTickCounter);
+                        envTickCounter = pr.getTickCounter();
+                        return;
                     }
-                    pr.wait(50);
+                    long remaining = deadline - System.currentTimeMillis();
+                    pr.wait(Math.min(Math.max(remaining, 1), 50));
                 }
             }
         } catch (InterruptedException e) {
