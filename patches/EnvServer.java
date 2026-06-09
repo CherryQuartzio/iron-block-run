@@ -361,6 +361,13 @@ public class EnvServer {
             }
         }
 
+        // Match main: spawn the horse after warmup skip frames so chunks are
+        // loaded and the mount walk can reach it. Soft resets spawn earlier in
+        // resetAgentForNewEpisode because the world is already warm.
+        if (!reuseWorld) {
+            mc.execute(() -> applyWorldDecorators(missionInit));
+        }
+
         for (int i = 0; i < 5; i++) {
             execActions("camera 0 0.0", 0);
             waitForNextObservation();
@@ -1423,7 +1430,9 @@ public class EnvServer {
         setAgentPosition(mc.player, missionInit, serverAuthoritative);
         enforceAgentGameMode(missionInit);
         cleanupEpisodeHorses(mc);
-        applyWorldDecorators(missionInit);
+        if (serverAuthoritative) {
+            applyWorldDecorators(missionInit);
+        }
 
         mc.player.setMotion(0, 0, 0);
         mc.player.fallDistance = 0;

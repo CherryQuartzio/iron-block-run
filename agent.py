@@ -1197,32 +1197,6 @@ class HorseRaceEnv(gym.Env):
 
     # -- Horse mounting --------------------------------------------------
 
-    @staticmethod
-    def _detect_horse_mount(obs, pre_mount_y, pre_mount_z):
-        """
-        Return True when the agent has likely mounted the horse.
-
-        ypos-only detection fails on sloped/elevated track (feet height barely
-        changes). Also accept walking to the horse spawn (facing -Z at yaw 180)
-        or standing at the horse's spawn coordinates.
-        """
-        try:
-            loc = obs["location_stats"]
-            y = float(loc["ypos"])
-            z = float(loc["zpos"])
-            x = float(loc["xpos"])
-        except (KeyError, TypeError, ValueError):
-            return False
-
-        if pre_mount_y is not None and y > pre_mount_y + 0.3:
-            return True
-        # Agent faces -Z; walking toward the horse decreases z.
-        if pre_mount_z is not None and z < pre_mount_z - 1.0:
-            return True
-        if abs(x - HORSE_X) < 1.5 and abs(z - HORSE_Z) < 1.5:
-            return True
-        return False
-
     def _mount_horse(self):
         """
         Execute the fixed startup sequence to mount the horse and orient
@@ -1243,14 +1217,12 @@ class HorseRaceEnv(gym.Env):
         # Let the world settle for a few ticks
         noop = self._get_noop_action()
         pre_mount_y = None
-        pre_mount_z = None
         for _ in range(5):
             obs, _, done, _ = self._unpack_step(self._minerl_step(noop))
             if done:
                 return obs
             try:
                 pre_mount_y = obs["location_stats"]["ypos"]
-                pre_mount_z = obs["location_stats"]["zpos"]
             except (KeyError, TypeError):
                 pass
 
@@ -1276,19 +1248,21 @@ class HorseRaceEnv(gym.Env):
             obs, _, done, _ = self._unpack_step(self._minerl_step(approach))
             if done:
                 return obs
-            if self._detect_horse_mount(obs, pre_mount_y, pre_mount_z):
+            try:
+                y = obs["location_stats"]["ypos"]
+            except (KeyError, TypeError):
+                continue
+            if pre_mount_y is not None and y > pre_mount_y + 0.3:
                 mounted = True
-                break
+                break  # mounted: ypos rose onto the horse's back
 
-        # Always restore a level view for the policy (undo the mount look-down).
-        # The ypos-only heuristic misses mounts on elevated terrain (ypos barely
-        # changes when the track slopes), which leaves pitch at
-        # MOUNT_LOOK_DOWN_DEG and makes the policy veer immediately.
-        look_up = self._get_noop_action()
-        look_up["camera"] = np.array([-MOUNT_LOOK_DOWN_DEG, 0.0], dtype=np.float32)
-        obs, _, done, _ = self._unpack_step(self._minerl_step(look_up))
-        if done:
-            return obs
+        # Restore a level view for the policy (undo the mount look-down).
+        if mounted:
+            look_up = self._get_noop_action()
+            look_up["camera"] = np.array([-MOUNT_LOOK_DOWN_DEG, 0.0], dtype=np.float32)
+            obs, _, done, _ = self._unpack_step(self._minerl_step(look_up))
+            if done:
+                return obs
 
         # Small pause to let mounting animation complete
         for _ in range(5):
@@ -1296,22 +1270,20 @@ class HorseRaceEnv(gym.Env):
             if done:
                 return obs
 
-        if not mounted:
-            try:
-                loc = obs["location_stats"]
+        try:
+            post_mount_y = obs["location_stats"]["ypos"]
+            if pre_mount_y is not None and post_mount_y <= pre_mount_y + 0.3:
                 logger.warning(
-                    "Horse mount may have failed (ypos %.2f -> %.2f, zpos %.2f -> %.2f). "
+                    "Horse mount may have failed (ypos %.2f -> %.2f). "
                     "Check that the horse spawned at (%.1f, %.1f, %.1f).",
                     pre_mount_y,
-                    float(loc["ypos"]),
-                    pre_mount_z,
-                    float(loc["zpos"]),
+                    post_mount_y,
                     HORSE_X,
                     HORSE_Y,
                     HORSE_Z,
                 )
-            except (KeyError, TypeError):
-                pass
+        except (KeyError, TypeError):
+            pass
 
         # TODO: Rotate camera to face the race track start direction.
         #       Adjust the yaw delta below based on your track layout.

@@ -118,9 +118,9 @@ checkpoint in `./agent/`. Evaluation logs now include per-episode `env_fps`
 | LAN, no spectator | `./run_agent.sh --no-lan` | Same as above; compare `env_fps` to isolate server load |
 
 Note: `Y` varies with track elevation. The `mount may have failed` warning can
-be a false positive when `ypos` barely changes on sloped track. More reliable:
-check Step 0 `Pitch` — it must be `0°`, not `20°` (a pitched-down camera means
-the mount look-up step was skipped and the policy will veer immediately).
+be a false positive when `ypos` barely changes on sloped track. A pitched-down
+camera (`Pitch≈20°`) during the race is normal on main too (spectator view over
+the horse's head) and is not itself a bug.
 
 Server tick load is recorded in the PlayRecorder jsonl as `serverTickDurationMs`
 (under the MCP-Reborn run logs directory). Values consistently above ~50 ms
