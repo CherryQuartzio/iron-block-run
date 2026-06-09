@@ -449,6 +449,40 @@ public class EnvServer {
         }
     }
 
+    // Clears NoAI on the horse the agent has just mounted. The horse is spawned
+    // with NoAI enabled so it holds position before the mount; once mounted we
+    // must restore AI so its server-side movement (LivingEntity.travel) matches
+    // main, where the horse is never NoAI. Runs on the integrated-server thread
+    // so the authoritative flag flips and syncs back to the client.
+    private void clearRiddenHorseNoAi(Minecraft mc) {
+        IntegratedServer integratedServer = mc.getIntegratedServer();
+        if (integratedServer == null || mc.player == null) {
+            return;
+        }
+        final java.util.UUID playerId = mc.player.getUniqueID();
+        integratedServer.execute(() -> {
+            ServerPlayerEntity serverPlayer =
+                    integratedServer.getPlayerList().getPlayerByUUID(playerId);
+            if (serverPlayer == null) {
+                List<ServerPlayerEntity> players = integratedServer.getPlayerList().getPlayers();
+                if (!players.isEmpty()) {
+                    serverPlayer = players.get(0);
+                }
+            }
+            if (serverPlayer == null) {
+                return;
+            }
+            Entity vehicle = serverPlayer.getRidingEntity();
+            if (vehicle instanceof AbstractHorseEntity) {
+                AbstractHorseEntity horse = (AbstractHorseEntity) vehicle;
+                if (horse.isAIDisabled()) {
+                    horse.setNoAI(false);
+                    LOGGER.info("[HorseAI] Restored AI on mounted horse (NoAI cleared)");
+                }
+            }
+        });
+    }
+
     private void enforceAgentGameMode(MissionInit missionInit) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) {
@@ -837,6 +871,15 @@ public class EnvServer {
             if (wasRiding && !riding) {
                 LOGGER.warn("[Dismount] player left the horse at tick {} (alive={})",
                     PlayRecorder.getInstance().getTickCounter(), mc.player.isAlive());
+            }
+            // On the mount transition, restore the horse's AI server-side. The
+            // horse spawns with NoAI so it stays put before the agent reaches it,
+            // but a NoAI horse reports isServerWorld()==false, which changes the
+            // mounted LivingEntity.travel() motion path and makes the main-trained
+            // policy veer off track. Clearing NoAI the moment the agent mounts
+            // restores main's mounted physics exactly.
+            if (riding && !wasRiding) {
+                clearRiddenHorseNoAi(mc);
             }
             wasRiding = riding;
         }

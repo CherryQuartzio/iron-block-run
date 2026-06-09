@@ -79,7 +79,20 @@ SPAWN_YAW = 180.0    # Facing -Z (toward the race track start)
 HORSE_DISTANCE = 3
 # Max env steps (ticks) spent walking up to and mounting the horse. Each tick
 # is ~0.22 blocks of walking, so this must comfortably exceed HORSE_DISTANCE.
-MOUNT_MAX_STEPS = 25
+#
+# It must ALSO outlast the server-side teleport-confirmation hold at episode
+# start: the soft reset teleports the agent via ServerPlayNetHandler
+# .setPlayerLocation(), which sets targetPos and makes the server IGNORE all
+# client movement packets until the client returns a CConfirmTeleport. On a
+# slow client (cold chunk load / render at episode start) that confirmation can
+# take ~30+ ticks, during which 'forward' does nothing. If the budget expires
+# inside that hold the agent never reaches the horse, the mount is detected too
+# late (after this loop gives up), and the camera-leveling below is skipped —
+# leaving the policy with a pitched-down view that veers off track. A generous
+# budget lets us keep driving forward+use through the hold and still mount (and
+# level the camera) once movement is accepted. The loop breaks as soon as the
+# mount registers, so fast environments pay no extra cost.
+MOUNT_MAX_STEPS = 90
 
 # Degrees to pitch the camera down before mounting. At pitch 0 the interaction
 # ray points at the horizon and sails over the horse; looking down aims it at
