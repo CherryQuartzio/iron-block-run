@@ -89,6 +89,7 @@ public class EnvServer {
     private static final int DEFAULT_SKIP_FIRST_FRAMES = 20;
     private static final long GAME_THREAD_TIMEOUT_MS = 5000L;
     private static final long GAME_THREAD_TASK_TIMEOUT_MS = 10000L;
+    private static final long RESET_TASK_TIMEOUT_MS = 60000L;
     private static final long RECORDING_WAIT_TIMEOUT_MS = 30000L;
     private static final long MAIN_MENU_WAIT_TIMEOUT_MS = 30000L;
     private static final long WORLD_READY_TIMEOUT_MS = 60000L;
@@ -319,7 +320,7 @@ public class EnvServer {
                 resetAgentForNewEpisode(missionInit);
                 PlayRecorder.getInstance().softResetEpisode();
                 ReplaySender.getInstance().clearEpisodeState();
-            });
+            }, RESET_TASK_TIMEOUT_MS);
             if (!resetOk) {
                 LOGGER.error("[Persistent] Soft episode reset may be incomplete — agent/horse position not updated");
             }
@@ -334,24 +335,32 @@ public class EnvServer {
                 LOGGER.error("[Persistent] World load timed out — mission init may hang");
             }
             waitForPlayerReady();
+            // Reset before PlayRecorder/EXEC_CMD starts — otherwise ReplaySender
+            // blocks the game thread and the reset task never runs.
+            boolean resetOk = runOnGameThreadWithPump(
+                    () -> resetAgentForNewEpisode(missionInit), RESET_TASK_TIMEOUT_MS);
+            if (!resetOk) {
+                LOGGER.error("[Persistent] Initial agent reset timed out — spawn position may be wrong");
+            }
         }
 
         waitForRecording();
         integratedServerAlive = true;
 
         maybeOpenToLan();
-        if (!reuseWorld) {
-            boolean resetOk = runOnGameThreadWithPump(() -> resetAgentForNewEpisode(missionInit));
-            if (!resetOk) {
-                LOGGER.error("[Persistent] Initial agent reset timed out — spawn position may be wrong");
-            }
-        }
 
-        envTickCounter = PlayRecorder.getInstance().getTickCounter();
+        PlayRecorder pr = PlayRecorder.getInstance();
+        envTickCounter = pr.getTickCounter();
+        // Prime the action pipeline so the first skip-frame step can advance ticks.
+        pumpReplaySender();
         int skipFrames = DEFAULT_SKIP_FIRST_FRAMES;
         for (int i = 0; i < skipFrames; i++) {
             execActions("camera 0 0.0", 0);
             waitForNextObservation();
+            if (envTickCounter == pr.getTickCounter()) {
+                LOGGER.warn("[Persistent] Skip frame {} did not advance tick (stuck at {})", i, envTickCounter);
+                pumpReplaySender();
+            }
         }
 
         for (int i = 0; i < 5; i++) {
