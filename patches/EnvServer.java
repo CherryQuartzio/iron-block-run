@@ -337,14 +337,19 @@ public class EnvServer {
         }
 
         waitForRecording();
-        integratedServerAlive = true;
 
-        maybeOpenToLan();
         if (!reuseWorld) {
-            // Recording has started and the game thread is ticking; the pumped
-            // skip-frame loop below drains this task between ReplaySender waits.
-            mc.execute(() -> resetAgentForNewEpisode(missionInit));
+            // Recording is active and ReplaySender is in EXEC_CMD — pump actions
+            // while waiting so the game thread can finish reset before skip frames.
+            boolean resetOk = runOnGameThreadWithPump(
+                    () -> resetAgentForNewEpisode(missionInit), RESET_TASK_TIMEOUT_MS);
+            if (!resetOk) {
+                LOGGER.error("[Persistent] Initial agent reset timed out — spawn position may be wrong");
+            }
         }
+
+        integratedServerAlive = true;
+        maybeOpenToLan();
 
         PlayRecorder pr = PlayRecorder.getInstance();
         envTickCounter = pr.getTickCounter();
