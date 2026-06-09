@@ -101,6 +101,7 @@ public class EnvServer {
     private MissionInit missionInit;
     private String activeWorldSource = null;
     private boolean lanPublished = false;
+    private volatile boolean integratedServerAlive = false;
     private boolean configLogged = false;
 
     private int port;
@@ -311,6 +312,7 @@ public class EnvServer {
             LOGGER.info("[Persistent] Soft episode reset — reusing loaded world");
             mc.execute(() -> resetAgentForNewEpisode(missionInit));
         } else {
+            integratedServerAlive = false;
             activeWorldSource = null;
             lanPublished = false;
             mc.execute(() -> loadOrCreateWorld(missionInit, final_seed));
@@ -318,9 +320,10 @@ public class EnvServer {
         }
 
         waitForRecording();
+        integratedServerAlive = true;
 
+        maybeOpenToLan();
         if (!reuseWorld) {
-            maybeOpenToLan();
             mc.execute(() -> resetAgentForNewEpisode(missionInit));
         }
 
@@ -998,16 +1001,23 @@ public class EnvServer {
             File profileDump = new File("profile-results-" + (new SimpleDateFormat("yyyy-MM-dd_HH.mm.ss")).format(new Date()) + ".txt");
             ((IResultableProfiler)mc.getProfiler()).getResults().writeToFile(profileDump.getAbsoluteFile());
         }
+        boolean soft = !forceHard && canSoftReset();
+        if (soft) {
+            // Unblock the game thread (ReplaySender action wait) before any
+            // synchronous work — otherwise runOnGameThread / quit can deadlock.
+            ReplaySender.getInstance().clearEpisodeState();
+        }
         PlayRecorder.getInstance().finishAndResetEpisode();
 
-        if (!forceHard && canSoftReset()) {
+        if (soft) {
             LOGGER.info("[Persistent] Soft quit — keeping integrated server and LAN clients");
-            ReplaySender.getInstance().clearEpisodeState();
         } else {
             if (!forceHard) {
-                LOGGER.warn("[Persistent] Hard quit — soft reset unavailable");
+                LOGGER.warn("[Persistent] Hard quit — soft reset unavailable (alive={} world={})",
+                        integratedServerAlive, activeWorldSource);
             }
             ReplaySender.getInstance().stop();
+            integratedServerAlive = false;
             activeWorldSource = null;
             lanPublished = false;
             waitForMainMenu(mc);
@@ -1056,14 +1066,8 @@ public class EnvServer {
             return;
         }
         configLogged = true;
-        boolean persistent = isPersistentServerEnabled();
-        boolean lan = isLanEnabled();
-        int lanPort = getLanPort();
-        boolean softReady = runOnGameThread(() -> {
-            return mc.getIntegratedServer() != null && mc.world != null;
-        });
-        LOGGER.info("[Persistent] Config: persistent={} lan={} port={} softResetReady={}",
-                persistent, lan, lanPort, softReady);
+        LOGGER.info("[Persistent] Config: persistent={} lan={} port={}",
+                isPersistentServerEnabled(), isLanEnabled(), getLanPort());
     }
 
     private void waitForRecording() throws InterruptedException {
@@ -1123,13 +1127,9 @@ public class EnvServer {
     }
 
     private boolean canSoftReset() {
-        if (!isPersistentServerEnabled()) {
-            return false;
-        }
-        return runOnGameThread(() -> {
-            Minecraft mc = Minecraft.getInstance();
-            return mc.getIntegratedServer() != null && mc.world != null;
-        });
+        return isPersistentServerEnabled()
+                && integratedServerAlive
+                && activeWorldSource != null;
     }
 
     private boolean canReuseWorld(String worldSrc) {
@@ -1154,6 +1154,9 @@ public class EnvServer {
                 return;
             }
             boolean ok = server.shareToLAN(GameType.SPECTATOR, true, port);
+            if (!ok && server.getPublic()) {
+                ok = true;
+            }
             if (ok) {
                 lanPublished = true;
                 LOGGER.info("[LAN] Spectators can connect on port {}", server.getServerPort());
