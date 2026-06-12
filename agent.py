@@ -2465,7 +2465,8 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
     Args:
         total_timesteps: Total number of environment steps to train for.
     """
-
+    # Ensure eval_plots directory exists for saving plots
+    os.makedirs("eval_plots", exist_ok=True)
 
     logger.info("Creating vectorised environment...")
     env = DummyVecEnv([make_env()])
@@ -2588,6 +2589,9 @@ def evaluate(
     if deterministic:
         _random.seed(seed)
         np.random.seed(seed)
+
+    # Ensure eval_plots directory exists for saving plots
+    os.makedirs("eval_plots", exist_ok=True)
 
     logger.info("Preparing evaluation environment...")
 
