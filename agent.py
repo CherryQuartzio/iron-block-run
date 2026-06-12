@@ -45,6 +45,7 @@ except Exception:  # pragma: no cover - optional dependency
     print("NOT USING CV2")
     _CV2_AVAILABLE = False
 VISUALIZE = False
+TRAIN = False
 from minerl.herobraine.env_spec import EnvSpec
 from minerl.herobraine.env_specs.human_controls import HumanControlEnvSpec
 from minerl.herobraine.hero import handlers
@@ -108,7 +109,7 @@ VNC_SCREEN_H = 1080
 RENDER_WINDOW_NAME = "HorseRace"
 
 # -- Training hyperparameters --
-TOTAL_TIMESTEPS = 100_000
+TOTAL_TIMESTEPS = 5_000_000
 LEARNING_RATE = 3e-4
 N_STEPS = 2048       # Steps per rollout buffer collection
 BATCH_SIZE = 64
@@ -117,6 +118,7 @@ GAMMA = 0.99
 GAE_LAMBDA = 0.95
 CLIP_RANGE = 0.2
 MAX_EPISODE_STEPS = 6000  # ~5 minutes at 20 tps
+ENT_COEF = 0.04
 
 # -- Model persistence --
 # Trained checkpoints are written to SAVED_AGENT_DIR as timestamped zips, e.g.
@@ -148,23 +150,19 @@ REWARD_CHECKPOINT = 50.0        # Crossing the next expected checkpoint
 REWARD_LAP_COMPLETE = 300.0     # Crossing start/goal after all checkpoints
 REWARD_PROGRESS = 0.5           # Multiplier for distance-decrease toward next CP
 REWARD_ON_PATH = 0.05           # Per-step: horse on grass_path / dirt_path
-REWARD_GOLD_BLOCK = 0.0         # Stepped on gold_block (speed boost plate)
-REWARD_SPRUCE_SLAB = 0.0        # Entering spruce_slab (bridge over water)
-PENALTY_SOUL_SAND = -0.26        # Per-step: on soul_sand
-PENALTY_WATER = 0.0            # On entry: in water
-REWARD_WATER_ESCAPE = 0.0        # On escape: out of water
-PENALTY_COBWEB = 0.0           # On entry: in cobweb
-PENALTY_OFF_COURSE = -0.25       # Per-step: on grass_block (off track)
-PENALTY_TIME = -0.01            # Per-step: encourages speed
+REWARD_GOLD_BLOCK = 5.0         # Stepped on gold_block (speed boost plate)
+REWARD_SPRUCE_SLAB = 0.1        # Entering spruce_slab (bridge over water)
+REWARD_ENTER_BRIDGE = 2.5
+PENALTY_SOUL_SAND = -0.4        # Per-step: on soul_sand
+PENALTY_WATER = -5.0            # On entry: in water
+PENALTY_IN_WATER = -0.4
+REWARD_WATER_ESCAPE = 1.0        # On escape: out of water
+PENALTY_COBWEB = -5.0           # On entry: in cobweb
+PENALTY_OFF_COURSE = -0.2       # Per-step: on grass_block (off track)
+PENALTY_TIME = -0.05            # Per-step: encourages speed
 PENALTY_STUCK = -50.0            # Terminal: stuck too long
 PENALTY_FAR_OFF_COURSE = -50.0   # Terminal: too far from track
 PENALTY_WRONG_DIRECTION = -1.0  # Per-step: moving toward previous CP (backward)
-
-OPTIMIZE_SPEED = False
-if OPTIMIZE_SPEED: # Rewards to change if optimizing speed
-    PENALTY_TIME = -0.03
-    PENALTY_WATER = -6.0
-    PENALTY_COBWEB = -4.0
 
 # -- Stuck / off-course detection --
 STUCK_WINDOW = 200              # Steps to check for stuck condition
@@ -200,7 +198,7 @@ CHECKPOINTS = [
 ]
 # fmt: on
 NUM_CHECKPOINTS = len(CHECKPOINTS)  # 6 (including start/goal)
-CHECKPOINT_TOLERANCE = 3.0 # Tolerance for checkpoint crossing in blocks
+CHECKPOINT_TOLERANCE = 5.0 # Tolerance for checkpoint crossing in blocks
 # -- Track centerline --
 # Ordered waypoints tracing the racetrack centerline as a CLOSED LOOP.
 # Entry types:
@@ -1835,36 +1833,38 @@ class HorseRaceEnv(gym.Env):
             logger.info(f"Agent has escaped cobweb.")
             self._in_cobweb = False
 
+        middle_grid =  (grid[BLOCK_ABOVE_CENTER_BLOCK], grid[BLOCK_ABOVE_CENTER_BLOCK+1], grid[BLOCK_ABOVE_CENTER_BLOCK-1], grid[BLOCK_ABOVE_CENTER_BLOCK+3], grid[BLOCK_ABOVE_CENTER_BLOCK-3])
+        floor_grid = (grid[CENTER_BLOCK], grid[CENTER_BLOCK+1], grid[CENTER_BLOCK-1], grid[CENTER_BLOCK+3], grid[CENTER_BLOCK-3])
         if above_block == "water": # underwater
             if not self._in_water:
                 reward += PENALTY_WATER
                 self._in_water = True
                 logger.info(f"Agent has entered water. ({PENALTY_WATER})")
-        elif "cobweb" in (grid[BLOCK_ABOVE_CENTER_BLOCK], grid[BLOCK_ABOVE_CENTER_BLOCK+1], grid[BLOCK_ABOVE_CENTER_BLOCK-1], grid[BLOCK_ABOVE_CENTER_BLOCK+3], grid[BLOCK_ABOVE_CENTER_BLOCK-3]):
+            else:
+                reward += PENALTY_IN_WATER
+        elif "cobweb" in middle_grid:
             if not self._in_cobweb:
                 reward += PENALTY_COBWEB
                 logger.info(f"Agent is in cobweb. ({PENALTY_COBWEB})")
                 self._in_cobweb = True
-        elif ground_block in ("grass_path", "dirt_path"):
-            reward += REWARD_ON_PATH
-        elif ground_block == "gold_block":
+        elif "gold_block" in floor_grid:
             if self._gold_block_entered:
                 reward += REWARD_ON_PATH
             else:
                 reward += REWARD_GOLD_BLOCK
                 logger.info(f"Agent is on gold block. (+{REWARD_GOLD_BLOCK})")
                 self._gold_block_entered = True
-        elif ground_block in ("spruce_slab",):
+        elif "spruce_slab" in floor_grid:
             if self._spruce_slab_entered:
-                reward += REWARD_ON_PATH
-            else:
                 reward += REWARD_SPRUCE_SLAB
-                logger.info(f"Agent is entering bridge. (+{REWARD_SPRUCE_SLAB})")
+            else:
+                reward += REWARD_ENTER_BRIDGE
+                logger.info(f"Agent is entering bridge. (+{REWARD_ENTER_BRIDGE})")
                 self._spruce_slab_entered = True
+        elif ground_block in ("grass_path", "dirt_path"):
+            reward += REWARD_ON_PATH
         elif ground_block == "soul_sand":
-            reward += PENALTY_SOUL_SAND            
-        elif ground_block == "cobweb":
-            reward += PENALTY_COBWEB
+            reward += PENALTY_SOUL_SAND
         elif ground_block in ("air", "cave_air"):
             pass
         else: # grass block, dirt, clay
@@ -2493,6 +2493,7 @@ def train(total_timesteps: int = TOTAL_TIMESTEPS):
             gamma=GAMMA,
             gae_lambda=GAE_LAMBDA,
             clip_range=CLIP_RANGE,
+            ent_coef=ENT_COEF,
             verbose=1,
             tensorboard_log=TENSORBOARD_LOG_DIR,
             # Structured vector obs -> a modest MLP gives plenty of capacity.
@@ -2684,15 +2685,6 @@ def evaluate(
             # Reset the environment to start next episode
             obs = eval_env.reset()
 
-    # Save plots using the existing plotting helpers (prefixed files)
-    try:
-        plot_rewards(episode_rewards, save_path=save_plots_prefix + REWARD_PLOT_PATH)
-        plot_race_time(episode_durations, save_path=save_plots_prefix + RACE_TIME_PLOT_PATH)
-        plot_segment_times(segment_times, save_path=save_plots_prefix + SEGMENT_TIME_PLOT_PATH)
-        plot_completion_rate(completion_rates, save_path=save_plots_prefix + COMPLETION_RATE_PLOT_PATH)
-    except Exception as e:
-        logger.warning("Could not generate evaluation plots: %s", e)
-
     # Print summary
     logger.info("Evaluation complete: %d episodes", len(episode_rewards))
     if episode_rewards:
@@ -2704,17 +2696,21 @@ def evaluate(
     if completion_rates:
         logger.info("Completion rate: mean=%.1f%%", float(np.mean(completion_rates) * 100.0))
 
+    plot_rewards(episode_rewards, save_path="./eval_plots/rewards.png")
+    plot_race_time(episode_durations, save_path="./eval_plots/race_time.png")
+    plot_segment_times(segment_times, save_path="./eval_plots/segment_time.png")
+    plot_completion_rate(completion_rates, save_path="./eval_plots/completion_rate.png")
+
     # Close environment
     eval_env.close()
 
 # ===========================================================================
 #  8. Main
 # ===========================================================================
-TRAIN = True
 if __name__ == "__main__":
     if TRAIN:
         logger.info("Training mode on...")
         train(total_timesteps=TOTAL_TIMESTEPS)
     else:
         logger.info("Evaluation mode on...")
-        evaluate(seed = 3, total_episodes=3, deterministic=False)
+        evaluate(seed = 3, total_episodes=20, deterministic=False)

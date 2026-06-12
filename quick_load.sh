@@ -1,5 +1,3 @@
-#!/bin/bash
-
 agent_file=$(find agent -maxdepth 1 -type f | head -n 1)
 saved_file=$(find saved_agents -maxdepth 1 -type f | head -n 1)
 
